@@ -35,3 +35,9 @@ htmlcov/
 /F5.hg38.*
 /human_permissive_*
 /hg19.cage_*
+re2g_raw/
+re2g_consolidated/
+enh_index/
+re2g_index/
+# Scratch for data prep / upload staging (e.g. the cCRE hosted-pair before it's pushed).
+tmpfiles/
