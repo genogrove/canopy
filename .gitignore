@@ -41,3 +41,5 @@ enh_index/
 re2g_index/
 # Scratch for data prep / upload staging (e.g. the cCRE hosted-pair before it's pushed).
 tmpfiles/
+# ponytail: design notes untracked for now — commit docs/showcase-design.md once it settles.
+docs/
