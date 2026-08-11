@@ -35,11 +35,15 @@ def build_system_prompt(resources_block: str) -> str:
     return f"{head}{_RESOURCES_HEADING}\n\n{resources_block.strip()}\n"
 
 
-def generate_query(question: str, system_prompt: str, *, model: str = DEFAULT_MODEL) -> str:
+def generate_query(question: str, system_prompt: str, *, model: str = DEFAULT_MODEL):
     """Translate ``question`` into ``pygenogrove`` Python via Claude.
 
-    Returns the generated Python source. The caller runs it through the sandbox;
-    nothing is executed here. Raises ``RuntimeError`` if the model declines.
+    Returns ``(cohort, targets, code)``: ``cohort`` is the biosample/cell-line the model read
+    from the question (``""`` if none named; the host resolves it against the ENCODE catalog),
+    ``targets`` is the declared enhancer targets — ``{"gene": ...}`` / ``{"region": ...}`` the
+    host resolves to the ``ENHANCERS`` it injects before running ``code`` (empty for questions
+    with no regulatory layer). ``code`` is the generated Python. The caller runs it through the
+    sandbox; nothing is executed here. Raises ``RuntimeError`` if the model declines.
     """
     import anthropic  # lazy: keeps the module importable without the SDK/key
 
@@ -54,13 +58,50 @@ def generate_query(question: str, system_prompt: str, *, model: str = DEFAULT_MO
     if response.stop_reason == "refusal":
         raise RuntimeError("the model declined to answer this question")
     text = "".join(b.text for b in response.content if b.type == "text")
-    return _strip_code_fence(text)
+    return parse_targets_and_code(text)
+
+
+def parse_targets_and_code(text: str):
+    """Split the model's reply into ``(cohort, targets, code)``.
+
+    ``cohort`` comes from an optional ``COHORT: <name>`` line, ``targets`` from an optional
+    ``TARGETS: [ ... ]`` JSON line (both outside the code fence; absent/malformed → ``""`` / ``[]``).
+    ``code`` is the fenced program (or the text as-is)."""
+    import json
+
+    cohort = ""
+    mc = re.search(r"^\s*COHORT:\s*(.+?)\s*$", text, re.MULTILINE)
+    if mc:
+        cohort = mc.group(1).strip().strip("\"'")
+
+    targets = []
+    mt = re.search(r"^\s*TARGETS:\s*(\[.*?\])\s*$", text, re.MULTILINE | re.DOTALL)
+    if mt:
+        try:
+            parsed = json.loads(mt.group(1))
+            if isinstance(parsed, list):
+                targets = [t for t in parsed if isinstance(t, dict)]
+        except ValueError:
+            pass
+
+    code = _strip_code_fence(text)
+    # Defensive: strip any COHORT:/TARGETS: declaration lines that leaked into the program body
+    # (e.g. the model fenced them with the code). `COHORT: MCF-7` is a valid Python annotation
+    # that would NameError at runtime, so never let it reach the sandbox.
+    code = "\n".join(ln for ln in code.splitlines()
+                     if not re.match(r"\s*(COHORT|TARGETS)\s*:", ln)).strip() + "\n"
+    return cohort, targets, code
 
 
 def _strip_code_fence(text: str) -> str:
-    """Return the Python inside a ```...``` block, or the text as-is if unfenced.
+    """Return the Python program from the model's reply.
 
-    system.md asks for a bare program, but models sometimes fence it anyway.
+    Prefer an explicit ```python fence (so a bare ``` block holding the COHORT/TARGETS
+    declarations is never mistaken for the program); else the last ``` block; else the text
+    as-is. system.md asks for one ```python fence, but be robust to variation.
     """
-    m = re.search(r"```(?:python)?\n(.*?)```", text, re.DOTALL)
-    return (m.group(1) if m else text).strip() + "\n"
+    m = re.search(r"```python\n(.*?)```", text, re.DOTALL)
+    if not m:
+        blocks = re.findall(r"```(?:\w+)?\n(.*?)```", text, re.DOTALL)
+        return (blocks[-1] if blocks else text).strip() + "\n"
+    return m.group(1).strip() + "\n"

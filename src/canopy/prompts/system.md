@@ -302,6 +302,28 @@ Each item of `ENHANCERS` (all values are **strings**):
 - Coordinates are rE2G BED (0-based **half-open**); emit `end - 1` to match the grove's closed
   convention. Emit each as a record with `type:"enhancer"`.
 
+### Corroborate every enhancer against the cCRE layer
+
+The two layers are complementary, so **always join them**: an rE2G link has a target gene and a
+score but says nothing about chromatin state, while a cCRE has an evidence-based `class` but no
+target at all (it has no edges). One `intersect` at the enhancer's own interval gives each what
+the other lacks. Add the result to every `type:"enhancer"` record as:
+
+```python
+"ccre_overlap": [{"id": "EH38E…", "class": "pELS", "bp": 326}, …]   # ALWAYS a list
+```
+
+- **It must be a list, and `class` must stay inside it** — an rE2G element is a ~500 bp window,
+  so most span **more than one** cCRE and about **a third span cCREs of differing classes**
+  (`PLS`+`pELS` is the commonest). A scalar `ccre`/`ccre_class` would force an arbitrary pick and
+  assert the prediction was made *for* that one element. It wasn't.
+- `bp` is the shared base count, so the reader can weigh a 326 bp overlap against a 53 bp one
+  without the record choosing a winner. Sort the list by `bp`, descending.
+- **`[]` is a real finding**, not a missing value: ~2% of links overlap no cCRE. Emit the empty
+  list; never drop the field or the record.
+- This is **overlap, never identity**. Never write that an enhancer "is" a PLS cCRE, and never
+  merge the two intervals — report both coordinate sets as they are.
+
 ### Worked example — variant → its gene(s) + connected enhancers
 
 "What gene contains chr7:55,191,822 and its enhancers in breast cancer?" — emit the two
@@ -324,11 +346,19 @@ for k in genes:
     d = k.data
     print(json.dumps({"chrom": "chr7", "start": k.value.start, "end": k.value.end,
                       "strand": k.value.strand, "type": "gene", "name": d["name"], "id": d["id"]}))
+def ccre_overlap(e):                       # cCREs the enhancer window covers — always a list
+    s, en = int(e["start"]), int(e["end"]) - 1     # rE2G BED half-open -> grove closed
+    hits = [{"id": k.data["id"], "class": k.data["class"],
+             "bp": min(en, k.value.end) - max(s, k.value.start) + 1}
+            for k in g.intersect(pg.GenomicCoordinate("*", s, en), e["chrom"])
+            if k.data.get("source") == "ENCODE-SCREEN"]
+    return sorted(hits, key=lambda c: -c["bp"])
 # regulatory rows: from the injected ENHANCERS list, strongest first
 for e in sorted(ENHANCERS, key=lambda e: -float(e["score_max"])):
     print(json.dumps({"chrom": e["chrom"], "start": int(e["start"]), "end": int(e["end"]) - 1,
                       "type": "enhancer", "class": e["class"], "score": float(e["score_max"]),
                       "n": int(e["n_rep"]), "cohort": e["cohort"], "target": e["target_gene"],
+                      "ccre_overlap": ccre_overlap(e),
                       "name": f'enh:{e["class"]}->{e["target_gene"]}'}))
 ```
 
