@@ -71,4 +71,4 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   build three releases behind the one its generated code runs against. `test_resources_pins.py`
   now asserts the header version against `resources.PYGENOGROVE`, closing the one leg of the
   Level 2 "all agree" invariant that had no guard
-  ([#7](https://github.com/genogrove/canopy/issues/7)).
+  ([#7](https://github.com/genogrove/canopy/issues/7), [#8](https://github.com/genogrove/canopy/pull/8)).
