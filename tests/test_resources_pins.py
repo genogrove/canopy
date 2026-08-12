@@ -4,8 +4,9 @@ must be described identically in four places — the ``==`` dependency pin and t
 ``[tool.uv.sources]`` ``rev`` in ``pyproject.toml``, ``resources.PYGENOGROVE``, and
 the target version stated in the ``prompts/system.md`` header.
 
-If any of the three drifts, a run records a build it was not actually made
-against. This test mechanizes the manual "all three agree" QC check so drift
+If any of the four drifts, a run records a build it was not actually made
+against — or, for the prompt, generates code against a surface the pinned build
+may not have. This test mechanizes the manual "all four agree" QC check so drift
 fails CI instead of relying on review.
 
 ``pyproject.toml`` is parsed with regexes rather than ``tomllib`` so the test
@@ -18,11 +19,13 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from genogrove_canopy import resources
 from genogrove_canopy.resources import PYGENOGROVE
 
-_ROOT = Path(__file__).resolve().parent.parent
-PYPROJECT = _ROOT / "pyproject.toml"
-SYSTEM_MD = _ROOT / "src" / "genogrove_canopy" / "prompts" / "system.md"
+PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
+# Derived from the package rather than the repo layout, so it follows a package rename (the
+# import name changed in #6) and points at the file `llm.py` actually loads the prompt from.
+SYSTEM_MD = Path(resources.__file__).resolve().parent / "prompts" / "system.md"
 
 
 def _pyproject_text() -> str:
