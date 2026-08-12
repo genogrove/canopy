@@ -57,6 +57,10 @@ class _Grove:
 _GROVE: _Grove | None = None
 _LOCK = threading.Lock()
 
+#: Cap on an /ask body — a question, not a payload. Guards against a client-supplied
+#: Content-Length that would otherwise be read straight into memory.
+_MAX_BODY = 64 * 1024
+
 
 def _grove(model: str) -> _Grove:
     global _GROVE
@@ -95,7 +99,10 @@ def _pipeline(question: str, cohort: str, model: str, emit) -> dict:
     enh_pre, note = "", None
     if targets:
         from canopy.layers import enhancers
-        cohorts, note = _serve_cohorts(cohort, cohort_hint)
+        # `why` is the internal reason flag; `note` is display text. Keeping them apart stops the
+        # "default" sentinel leaking to the UI when a cohort resolves but finds no links.
+        cohorts, why = _serve_cohorts(cohort, cohort_hint)
+        note = None if why == "default" else why
         cohort_ids = _cohort_ids(cohorts)
         if cohort_ids:
             emit("step", f"Fetching enhancers for cohort(s) {'; '.join(cohorts)}")
@@ -103,7 +110,7 @@ def _pipeline(question: str, cohort: str, model: str, emit) -> dict:
             if records:
                 enh_pre = enhancers.preamble(records)
                 note = f"{len(records)} enhancer links from {'; '.join(cohorts)}" + (
-                    " (default)" if note == "default" else "")
+                    " (default)" if why == "default" else "")
 
     emit("step", "Running the query over the grove")
     result = grove.worker.submit("import json\n" + grove.preamble + enh_pre + code)
@@ -146,10 +153,22 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path != "/ask":
             self._send(404, "not found", "text/plain")
             return
-        length = int(self.headers.get("Content-Length", 0))
-        req = json.loads(self.rfile.read(length) or "{}")
-        question = (req.get("question") or "").strip()
-        cohort = (req.get("cohort") or "").strip()
+        # Parse before responding, so a malformed request gets a 400 rather than a dead connection:
+        # a bad Content-Length, non-JSON body, or non-string field all raise here, and this runs
+        # outside the try below (which can only report errors once the 200 stream has started).
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            if length > _MAX_BODY:
+                self._send(413, json.dumps({"error": "request too large"}), "application/json")
+                return
+            req = json.loads(self.rfile.read(length) or "{}")
+            question, cohort = req.get("question") or "", req.get("cohort") or ""
+            if not isinstance(question, str) or not isinstance(cohort, str):
+                raise TypeError("question and cohort must be strings")
+            question, cohort = question.strip(), cohort.strip()
+        except (ValueError, TypeError, AttributeError) as exc:
+            self._send(400, json.dumps({"error": f"bad request: {exc}"}), "application/json")
+            return
         if not question:
             self._send(400, json.dumps({"error": "empty question"}), "application/json")
             return
