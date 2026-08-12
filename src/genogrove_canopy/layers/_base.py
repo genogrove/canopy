@@ -4,9 +4,9 @@
 A ``Layer`` carries the metadata the **agent** reads to decide whether a question implicates
 this layer and what its query code will see (``axis``/``kind``/``when``/``schema``), plus the
 uniform host-side ``attach`` op that materialises fetched records as grove nodes/edges. Each
-layer module (``canopy.layers.ccres``, ``canopy.layers.enhancers``, …) defines its own
+layer module (``genogrove_canopy.layers.ccres``, ``genogrove_canopy.layers.enhancers``, …) defines its own
 ``fetch`` shaped to its need and exports a module-level ``LAYER = Layer(...)``; the registry in
-``canopy.layers`` collects them. See ``docs/showcase-design.md`` §4 (taxonomy) and §6
+``genogrove_canopy.layers`` collects them. See ``docs/showcase-design.md`` §4 (taxonomy) and §6
 (on-demand resolution).
 """
 

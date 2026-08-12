@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from canopy.resources import PYGENOGROVE
+from genogrove_canopy.resources import PYGENOGROVE
 
 PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 

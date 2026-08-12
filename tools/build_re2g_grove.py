@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from canopy import resources  # noqa: E402
+from genogrove_canopy import resources  # noqa: E402
 
 
 def _row(**kw):

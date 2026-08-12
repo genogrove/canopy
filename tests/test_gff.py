@@ -8,7 +8,7 @@ import pytest
 
 pg = pytest.importorskip("pygenogrove")
 
-from canopy.gff import load_gff
+from genogrove_canopy.gff import load_gff
 
 GFF3 = (
     "##gff-version 3\n"
@@ -90,7 +90,7 @@ def test_hierarchy_edges(tmp_path) -> None:
     assert g.get_edges(entry[0])[0] == {"rel": "next", "tx": "t1"}
 
     # no CDS in this fixture -> the transcript has no span, so the derived exon range is None
-    from canopy.gff import exon_cds
+    from genogrove_canopy.gff import exon_cds
 
     assert txs[0].data["cds_start"] is None
     assert exon_cds(entry[0], txs[0]) is None
@@ -125,7 +125,7 @@ def test_cds_folded_into_exons(tmp_path) -> None:
 
     # The coding sub-range is per (exon, transcript) — an exon key is shared by every isoform
     # that uses it, coding in one and UTR in another — so it is derived, never stored.
-    from canopy.gff import exon_cds
+    from genogrove_canopy.gff import exon_cds
 
     exons = {k.value.start: k for k in everything if k.data["type"] == "exon"}
     assert "cds" not in exons[999].data                       # not on the exon payload
@@ -150,7 +150,7 @@ SHARDED = (
 
 
 def test_write_sharded_groves_splits_by_chromosome(tmp_path) -> None:
-    from canopy.gff import write_sharded_groves
+    from genogrove_canopy.gff import write_sharded_groves
 
     p = tmp_path / "two.gff3"
     p.write_text(SHARDED)
@@ -192,7 +192,7 @@ def test_foreign_layer_keeps_its_attributes(tmp_path) -> None:
     """A non-gene/transcript/exon feature keeps its column-9 attributes + source, so a cCRE
     in a unified GFF survives the load with its `class`. Modelled types keep the lean payload
     (GENCODE's tag/level/havana_* must NOT be dragged along). Both loaders must agree."""
-    from canopy.gff import build_grove, load_gff
+    from genogrove_canopy.gff import build_grove, load_gff
 
     p = tmp_path / "unified.gff3"
     p.write_text(UNIFIED)
@@ -223,7 +223,7 @@ def test_biotype_is_the_features_own(tmp_path) -> None:
     """A transcript stores `transcript_type`, not its gene's — otherwise an NMD isoform of a
     protein-coding gene reads back as protein_coding and the distinction is unrecoverable. The
     gene's biotype is never lost: it's on the gene node. Exons carry no biotype at all."""
-    from canopy.gff import build_grove
+    from genogrove_canopy.gff import build_grove
 
     p = tmp_path / "nmd.gff3"
     p.write_text(NMD)
@@ -272,7 +272,7 @@ def test_exons_dedup_per_gene_and_chains_stay_separate(tmp_path) -> None:
     """GFF repeats an exon line per transcript; those are the same exon and collapse to one key.
     An identical interval in a DIFFERENT gene is a different exon and must not merge. The `tx`
     tag on the chain edges is what keeps each isoform's walk on its own path through a shared key."""
-    from canopy.gff import build_grove
+    from genogrove_canopy.gff import build_grove
 
     p = tmp_path / "shared.gff3"
     p.write_text(SHARED)

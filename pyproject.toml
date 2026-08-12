@@ -31,7 +31,7 @@ classifiers = [
 dependencies = [
     "anthropic>=0.92",
     # Pinned for Level 2 reproducibility; the exact build (commit) is pinned in
-    # [tool.uv.sources] below and mirrored in canopy.resources.
+    # [tool.uv.sources] below and mirrored in genogrove_canopy.resources.
     "pygenogrove==0.7.4",
 ]
 
@@ -46,7 +46,7 @@ dev = [
 [project.scripts]
 # Standalone entry point. The paper's `genogrove canopy <question>` surface is a thin
 # alias over this command (see README → "The `genogrove canopy` surface").
-canopy = "canopy.cli:main"
+canopy = "genogrove_canopy.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/genogrove/canopy"
@@ -60,7 +60,7 @@ Issues = "https://github.com/genogrove/canopy/issues"
 pygenogrove = { git = "https://github.com/genogrove/pygenogrove", rev = "f803f01f4a1f8ff1a6482461144d576b599fc481" }
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/canopy"]
+packages = ["src/genogrove_canopy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

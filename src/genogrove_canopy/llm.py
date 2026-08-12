@@ -4,9 +4,9 @@
 Given a natural-language question, ask Claude to emit Python that drives
 ``pygenogrove`` to compute the answer. The model is given the ``pygenogrove`` API
 surface, the grove model, and the curated resource context (see
-:mod:`canopy.resources`) via the system prompt in ``prompts/system.md``.
+:mod:`genogrove_canopy.resources`) via the system prompt in ``prompts/system.md``.
 
-The generated code is untrusted: it must only ever run through :mod:`canopy.sandbox`,
+The generated code is untrusted: it must only ever run through :mod:`genogrove_canopy.sandbox`,
 never ``exec``'d here.
 """
 

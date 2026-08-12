@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import time
 
-from canopy import resources as r
+from genogrove_canopy import resources as r
 
 mb = lambda p: os.path.getsize(p) / 1e6
 

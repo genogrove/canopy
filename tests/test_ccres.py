@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 
-from canopy.layers import ccres
+from genogrove_canopy.layers import ccres
 
 pg = pytest.importorskip("pygenogrove")
 
@@ -59,7 +59,7 @@ def test_all_records_streams_the_registry():
 def test_baked_grove_returns_ccres_alongside_genes():
     """End-to-end: cCREs are baked into the shipped grove and a single GroveView.intersect at the
     EGFR example variant returns EGFR *and* the dELS cCRE. Skipped until the grove is built."""
-    from canopy import resources
+    from genogrove_canopy import resources
 
     gg = resources._baked_grove_gg("gencode.human")
     if not gg.exists():

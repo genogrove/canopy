@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Isolation tests for :mod:`canopy.sandbox`.
+"""Isolation tests for :mod:`genogrove_canopy.sandbox`.
 
 These assert the guarantees in the module docstring actually hold: allowed code
 runs, dangerous imports are blocked, network has no reachable path, the
@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from canopy import sandbox
-from canopy.sandbox import ALLOWED_IMPORTS, SandboxResult, run
+from genogrove_canopy import sandbox
+from genogrove_canopy.sandbox import ALLOWED_IMPORTS, SandboxResult, run
 
 pytestmark = pytest.mark.skipif(
     os.name != "posix", reason="sandbox uses POSIX process-group / rlimit isolation"

@@ -9,8 +9,8 @@ records table, and a locus view for interval answers) talks to two endpoints on 
 * ``GET  /cohorts`` — the rE2G cohort list, for the picker
 * ``POST /ask``     — ``{question, cohort}`` → ``{summary, records, code}`` (or ``{error, code}``)
 
-No web framework: the backend is glue around :mod:`canopy.llm` (code-gen) and a warm
-:class:`canopy.sandbox.Worker` per cohort selection — the same worker ``--interactive`` uses,
+No web framework: the backend is glue around :mod:`genogrove_canopy.llm` (code-gen) and a warm
+:class:`genogrove_canopy.sandbox.Worker` per cohort selection — the same worker ``--interactive`` uses,
 so the grove ``open`` is paid once per cohort and reused across questions.
 """
 
@@ -22,8 +22,8 @@ import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from canopy import llm, resources, sandbox
-from canopy.cli import (
+from genogrove_canopy import llm, resources, sandbox
+from genogrove_canopy.cli import (
     DEFAULT_COHORT,
     DEFAULT_MODEL,
     _BASE,
@@ -98,7 +98,7 @@ def _pipeline(question: str, cohort: str, model: str, emit) -> dict:
 
     enh_pre, note = "", None
     if targets:
-        from canopy.layers import enhancers
+        from genogrove_canopy.layers import enhancers
         # `why` is the internal reason flag; `note` is display text. Keeping them apart stops the
         # "default" sentinel leaking to the UI when a cohort resolves but finds no links.
         cohorts, why = _serve_cohorts(cohort, cohort_hint)

@@ -9,8 +9,8 @@ of truth for "what data exists and how the query code sees it" (``docs/showcase-
 
 from __future__ import annotations
 
-from canopy.layers import ccres, enhancers
-from canopy.layers._base import Layer
+from genogrove_canopy.layers import ccres, enhancers
+from genogrove_canopy.layers._base import Layer
 
 # One entry per layer module. Order is the order shown to the agent.
 REGISTRY: dict[str, Layer] = {m.LAYER.name: m.LAYER for m in (ccres, enhancers)}

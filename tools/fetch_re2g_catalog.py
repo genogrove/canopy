@@ -2,11 +2,11 @@
 """Fetch the ENCODE-rE2G biosample catalog → a TSV that ships with the package.
 
 The catalog is metadata only: one row per prediction annotation (biosample → accession),
-so `canopy.resources` can show the agent every biosample and fetch the edge BED for only the
+so `genogrove_canopy.resources` can show the agent every biosample and fetch the edge BED for only the
 one(s) a query names (lazy axis 1; region tabix is axis 2). Regenerate when ENCODE adds
 biosamples.
 
-    python tools/fetch_re2g_catalog.py            # writes src/canopy/data/encode_re2g_catalog.tsv
+    python tools/fetch_re2g_catalog.py            # writes src/genogrove_canopy/data/encode_re2g_catalog.tsv
 
 Stdlib only (urllib + json + csv) — no third-party deps, runs in any interpreter.
 """
