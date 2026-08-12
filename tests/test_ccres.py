@@ -56,14 +56,15 @@ def test_all_records_streams_the_registry():
     assert r["chrom"].startswith("chr") and r["ccre_class"]
 
 
-def test_baked_grove_returns_ccres_alongside_genes():
-    """End-to-end: cCREs are baked into the shipped grove and a single GroveView.intersect at the
-    EGFR example variant returns EGFR *and* the dELS cCRE. Skipped until the grove is built."""
+def test_shipped_grove_returns_ccres_alongside_genes():
+    """End-to-end: the cCREs are *in* the shipped grove, so one GroveView.intersect at the EGFR
+    example variant returns EGFR **and** the dELS cCRE — no local bake, no second handle.
+    Skipped until the grove is cached (`canopy --init`)."""
     from genogrove_canopy import resources
 
-    gg = resources._baked_grove_gg("gencode.human")
+    gg = resources._all_grove_gg("gencode.human")
     if not gg.exists():
-        pytest.skip("baked grove not built (run `canopy --init`)")
+        pytest.skip("grove not cached (run `canopy --init`)")
     hits = [k.data for k in pg.GroveView.open(str(gg))
             .intersect(pg.GenomicCoordinate("*", 55191821, 55191821), "chr7")]
     assert "gene" in {d.get("type") for d in hits}

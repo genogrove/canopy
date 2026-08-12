@@ -72,6 +72,61 @@ def test_system_prompt_target_matches_registry() -> None:
     )
 
 
+def test_pinned_grove_artifact_is_immutable() -> None:
+    """Every pinned grove artifact must be a checksummed, immutable reference.
+
+    The build pin has had a drift guard since #2; the *data* pins never did, which is how a
+    grove artifact built under an older payload model stayed pinned across three releases
+    (#9). A movable ref is the failure mode that matters: `resolve/main` on Hugging Face or a
+    `/tree/` URL keeps resolving after the file behind it changes, so the sha256 check starts
+    failing on a fetch that used to work — or worse, the sha is updated to match and the pin
+    silently now means something else.
+    """
+    movable = ("/resolve/main/", "/resolve/master/", "/tree/", "/blob/main/", "/raw/main/")
+    for name, res in resources.RESOURCES.items():
+        if not res.grove_url:
+            continue
+        assert re.fullmatch(r"[0-9a-f]{64}", res.grove_sha256), (
+            f"{name}: grove_sha256 must be a full 64-hex sha256 (got {res.grove_sha256!r})"
+        )
+        for ref in movable:
+            assert ref not in res.grove_url, (
+                f"{name}: grove_url pins the movable ref {ref!r} — use an immutable commit sha "
+                f"so the pinned bytes cannot change underneath the checksum ({res.grove_url})"
+            )
+        # A Hugging Face `resolve/<ref>/…` must name a 40-hex commit, not a branch or tag.
+        m = re.search(r"huggingface\.co/datasets/[^/]+/[^/]+/resolve/(?P<ref>[^/]+)/", res.grove_url)
+        if m:
+            assert re.fullmatch(r"[0-9a-f]{40}", m.group("ref")), (
+                f"{name}: grove_url resolves ref {m.group('ref')!r}, which is not an immutable "
+                "commit sha"
+            )
+
+
+def test_no_resource_url_is_a_placeholder() -> None:
+    """No *runtime-resolved* resource may ship an unreachable placeholder URL.
+
+    `encode.ccre.v4` is exempt and asserted to stay exempt: it is a build-time input whose bytes
+    were never uploaded, and nothing in the query path resolves it (the cCREs ship inside the
+    grove). Every other entry is fetched on a user's machine, so a placeholder there is a broken
+    install — which is exactly what shipped before #9, when baking resolved that entry at runtime.
+    """
+    build_time_only = {"encode.ccre.v4"}
+    for name, res in resources.RESOURCES.items():
+        urls = [u for u in (res.url, res.index_url, res.grove_url) if u]
+        placeholders = [u for u in urls if ".invalid" in u or "pending-upload" in u]
+        if name in build_time_only:
+            assert placeholders, (
+                f"{name} is listed as build-time-only but now has real URLs — if it is fetched at "
+                "runtime, drop it from `build_time_only` so this guard covers it"
+            )
+            continue
+        assert not placeholders, (
+            f"{name}: placeholder URL(s) {placeholders} would fail on any machine without a "
+            "pre-seeded cache"
+        )
+
+
 def test_pin_is_an_immutable_commit() -> None:
     """The pin must be a full 40-char commit SHA, not a movable branch/tag."""
     assert re.fullmatch(r"[0-9a-f]{40}", PYGENOGROVE.git_rev), (

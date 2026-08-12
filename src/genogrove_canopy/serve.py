@@ -86,9 +86,9 @@ def _pipeline(question: str, cohort: str, model: str, emit) -> dict:
     """Run one question end to end, calling ``emit(kind, msg)`` before each visible step. The UI
     ``cohort`` is an **override**; otherwise the model's declared cohort (or the default) is used.
     Returns the result dict (``records``/``summary``/``code``/``note``) or ``{"error", "code"?}``."""
-    if not resources._baked_grove_gg(_BASE).exists():
-        emit("step", "Preparing the grove — first run: a pinned ~90 MB GENCODE .gg + baking cCREs")
-        resources.ensure_baked_grove(_BASE)
+    if not resources._all_grove_gg(_BASE).exists():
+        emit("step", "Fetching the grove — first run only: a pinned ~109 MB .gg (genes + cCREs)")
+        resources.ensure_all_grove(_BASE)
 
     emit("step", "Opening the grove")
     grove = _grove(model)

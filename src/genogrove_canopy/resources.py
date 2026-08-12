@@ -136,25 +136,41 @@ RESOURCES: dict[str, Resource] = {
         filename="gencode.v50.annotation.sorted.gff3.gz",
         index_url="https://zenodo.org/api/records/21123308/files/gencode.v50.annotation.sorted.gff3.gz.tbi/content",
         index_sha256="52020642c93f01c24488d98b446d705a655d31ea39339fad36cced3b9cc9480a",
-        # Prebuilt grove: gene/transcript/exon + contains/first_exon/next edges, CDS folded
-        # onto exons. pygenogrove v0.7.2, format 0.2. ~90 MB vs the 237 MB tabix GFF.
-        # STALE — built under the pre-`_GROVE_SCHEMA=2` model: exons are per-transcript (not
-        # deduped) and carry `id`/`biotype`/`cds`, and the chain edges have no `tx`. Every
-        # generated query now assumes otherwise, so this must be rebuilt and re-pinned; until
-        # then `ensure_all_grove` prefers it over a correct local build.
-        grove_url="https://zenodo.org/api/records/21459419/files/gencode.v50.annotation.grove-fmt0.2.gg/content",
-        grove_sha256="df0fca51476d974369db97159a7d4431bfa870d275eb159f4cb21466d3d1a47e",
+        # Prebuilt **unified** grove (109 MB): the GENCODE backbone — gene/transcript/exon with
+        # contains/first_exon/next edges, exons deduped per gene, chain edges carrying `tx` — PLUS
+        # the 2,348,854 ENCODE cCREs already in it as `type:"regulatory_region"`,
+        # `source:"ENCODE-SCREEN"` nodes. 4,204,157 keys / 5,722,676 edges, built in one pass from
+        # the unified GFF under pygenogrove 0.7.4.
+        #
+        # Because the layer ships inside the grove, nothing resolves `encode.ccre.v4` at query time
+        # and there is no local bake — the old deserialize→insert→reserialize step (and the
+        # `_BAKED_SCHEMA` that versioned it) is gone.
+        #
+        # The URL pins an immutable HF **commit**, not `resolve/main`: a branch ref is movable and
+        # would defeat the Level 2 guarantee. Verified end-to-end through `_download` (302 → 200,
+        # 109,083,063 bytes, sha256 match).
+        grove_url=(
+            "https://huggingface.co/datasets/genogrove/canopy/resolve/"
+            "8feafeb7f1ae2587a337a399e0416f1c726453cf"
+            "/groves/gencode.v50+ccre.v4.grove-model.gg"
+        ),
+        grove_sha256="f1c53fe2d535eaaf698e159e4943e9195bbd36407a630b0ee4abf59c87c8e4e0",
         description="GENCODE v50 comprehensive gene annotation, GRCh38 (GFF3, sorted + bgzip + tabix).",
     ),
     "encode.ccre.v4": Resource(
         name="encode.ccre.v4",
-        # ENCODE Registry of cCREs V4 (GRCh38) — the epigenomic node layer. Ships as a hosted
-        # bgzip+tabix pair (like the GENCODE grove), so no on-the-fly indexing on a user's machine;
-        # genogrove_canopy.layers.ccres reads only a locus via the .tbi. Nature 2026, doi:10.1038/s41586-025-09909-9.
-        # URLs are PENDING upload (Zenodo/HF); the pair is pre-seeded in the content-addressed
-        # cache meanwhile, so resolve/indexed_path hit the cache and never fetch. The `.invalid`
-        # host guarantees a loud failure (never a silent bad download) if the cache is ever cleared
-        # before the real URLs land. Replace both URLs once uploaded — the sha256s are final.
+        # ENCODE Registry of cCREs V4 (GRCh38). Nature 2026, doi:10.1038/s41586-025-09909-9.
+        #
+        # **Build-time input only — never resolved on a user's machine.** The cCREs ship inside the
+        # unified grove above, so the query path reads them from there; nothing in `src/` resolves
+        # this entry (`layers.ccres.all_records`/`in_region` are host-side helpers with no
+        # production caller). It stays in the catalog to document the layer's provenance and sha256
+        # for anyone rebuilding the unified GFF.
+        #
+        # The `.invalid` host is deliberate: these bytes were never uploaded, and a loud DNS failure
+        # beats a silent bad download if something starts resolving this again. Uploading the pair
+        # to `genogrove/canopy` would make the *rebuild* reproducible too — the sha256s below are
+        # final, so upload from the content-addressed cache rather than regenerating.
         url="https://pending-upload.invalid/GRCh38-cCREs.v4.bed.gz",
         sha256="9f33d157de568afffedc0b3bebd0b5aaa350e341cb18d5009d2fee6f4a8cee0d",
         filename="GRCh38-cCREs.v4.bed.gz",
@@ -321,61 +337,17 @@ def grove_view(name: str):
     return pg.GroveView.open(str(ensure_all_grove(name)))
 
 
-# Bump when the baked Tier-1 layer set / a baked layer's node schema changes, OR when a
-# pygenogrove bump changes baked-grove correctness — so a stale combined grove is rebuilt rather
-# than served. Currently: GENCODE backbone + the ENCODE cCRE registry (genogrove_canopy.layers.ccres) as
-# `type:"regulatory_region", source:"ENCODE-SCREEN"` nodes. v2 = rebuilt under pygenogrove 0.7.4
-# (0.7.3 baked cCREs that weren't `intersect`-queryable — see ensure_baked_grove). v3 = cCRE
-# nodes moved off the ad-hoc `type:"ccre"` onto the SO term + a `source` tag.
-_BAKED_SCHEMA = "3"
-
-
-def _baked_grove_gg(name: str) -> Path:
-    """Path to the shipped grove = backbone + Tier-1 baked layers (may not exist yet)."""
-    return _all_grove_gg(name).with_name(f"_all+baked{_BAKED_SCHEMA}.gg")
-
-
-def ensure_baked_grove(name: str) -> Path:
-    """The shipped/live grove: the GENCODE backbone with the Tier-1 **static** layers baked in as
-    nodes (currently the ENCODE cCRE registry, ~2.35M `type:"ccre"` nodes). Built once and cached.
-
-    Deserialize the pinned GENCODE `.gg`, insert every cCRE as a node, reserialize. A `GroveView`
-    then returns cCREs on `intersect` alongside genes with **zero** query-time work — the layer is
-    genuinely in the one structure, and the warm-worker read path is unchanged. cCREs are static
-    (one registry, no cohort/tissue axis), so baking beats per-query fetch; large/dynamic layers
-    (enhancers, JASPAR) stay out of the grove and are fetched per query/locus instead.
-    """
-    gg = _baked_grove_gg(name)
-    if gg.exists():
-        return gg
-    import pygenogrove as pg
-
-    from genogrove_canopy.layers import ccres
-
-    # Reuse the pinned GENCODE `.gg` (fast) and insert the cCRE registry into it. Deserialize-then-
-    # insert is valid as of pygenogrove **0.7.4** (engine 0.25.6), which fixed the large-batch
-    # insert-indexing bug (#68): on 0.7.3 the 2.35M inserts were stored and counted but not
-    # `intersect`-queryable, and serialize preserved the broken index. So the `PYGENOGROVE == 0.7.4`
-    # pin is load-bearing for this build to be correct — a stale grove baked under 0.7.3 must be
-    # discarded (bump `_BAKED_SCHEMA`).
-    base = ensure_all_grove(name)          # the pinned GENCODE .gg (download or local build)
-    g = pg.Grove.deserialize(str(base))
-    ccres.attach(g, ccres.all_records())   # + ~2.35M `source:"ENCODE-SCREEN"` nodes
-    gg.parent.mkdir(parents=True, exist_ok=True)
-    tmp = gg.with_name(gg.name + ".tmp")
-    g.serialize(str(tmp))
-    tmp.replace(gg)  # commit the baked grove atomically
-    return gg
-
-
-# Bump when ``genogrove_canopy.gff``'s grove model changes, so a stale `.gg` (valid pygenogrove
-# but built from an older schema) is rebuilt rather than silently served. v2 = a feature's
-# `biotype` is its own (transcript_type on a transcript), exons carry none, and non-hierarchy
-# types keep their column-9 attributes + `source`.
-# NOTE: this only invalidates *locally built* groves. `ensure_all_grove` prefers the pinned
-# prebuilt `.gg` (`Resource.grove_url`), which was serialized under the old model — that hosted
-# artifact has to be rebuilt and re-pinned before the shipped grove reflects any of this.
-_GROVE_SCHEMA = "2"
+# Bump when the grove's content or payload model changes, so a stale `.gg` is re-fetched/rebuilt
+# rather than silently served. v2 = a feature's `biotype` is its own (transcript_type on a
+# transcript), exons carry none, and non-hierarchy types keep their column-9 attributes + `source`.
+# v3 = the pinned artifact is the **unified** grove (backbone + ENCODE cCREs in one build).
+#
+# The bump is load-bearing, not cosmetic: this value is part of the cache directory
+# (`_grove_dir`), but the rest of that key is the *annotation's* sha256 — which did not change when
+# `grove_url` was re-pinned. Without the bump, anyone holding a cached `_all.gg` from the old
+# GENCODE-only Zenodo artifact would keep being served it forever, since `ensure_all_grove` returns
+# early on an existing path and never re-checks the URL.
+_GROVE_SCHEMA = "3"
 
 
 def _grove_dir(name: str) -> Path:

@@ -55,9 +55,11 @@ def in_region(chrom: str, start: int, end: int) -> list[dict]:
 
 
 def all_records():
-    """Yield every cCRE in the registry (whole-BED stream) — the build-time input for baking the
-    layer into the shipped grove (``resources.ensure_baked_grove``). Host-side only: reads the
-    pinned ``.bed.gz`` directly, no tabix. ~2.35M records."""
+    """Yield every cCRE in the registry (whole-BED stream) — the build-time input for the unified
+    grove. Host-side only: reads the pinned ``.bed.gz`` directly, no tabix. ~2.35M records.
+
+    **No caller in the query path.** The cCREs ship inside the pinned grove, so nothing resolves
+    ``encode.ccre.v4`` on a user's machine; this exists for regenerating that artifact."""
     import gzip
 
     path = resources.indexed_path(_NAME)  # the hosted .bed.gz (its .tbi is unused here)
