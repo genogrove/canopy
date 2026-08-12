@@ -26,7 +26,8 @@ def test_render_bed_converts_to_half_open():
 
 
 def test_render_tsv_and_json():
-    assert "chrom\tstart\tend\tname\tstrand" in _render(_REC, "tsv")
+    # column order is deliberate (_record_columns): coordinates, then identity, then evidence
+    assert "chrom\tstart\tend\tstrand\tname" in _render(_REC, "tsv")
     assert json.loads(_render(_REC, "json").strip())["name"] == "EGFR"  # grove-native, unconverted
 
 
