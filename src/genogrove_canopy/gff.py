@@ -3,7 +3,7 @@
 
 The canonical GENCODE -> Grove transform. Pair with ``resources.resolve``::
 
-    from canopy import gff, resources
+    from genogrove_canopy import gff, resources
     g = gff.load_gff(resources.resolve("gencode.human"), region=("chr7", 55_000_000, 55_300_000))
 
 Targets the universal ``pg.Grove`` (JSON payloads + labelled edges), not the
@@ -86,7 +86,7 @@ def _biotype(entry):
 def _foreign_payload(entry):
     """Payload for a feature outside ``_MODELLED_TYPES``: its GFF attributes verbatim, plus
     ``source`` (column 2) so a query can tell one layer from another. ``ID`` is renamed to
-    ``id`` to match the modelled payload and ``canopy.layers``' baked nodes."""
+    ``id`` to match the modelled payload and ``genogrove_canopy.layers``' baked nodes."""
     attrs = dict(entry.attributes)
     return {"source": entry.source, "id": attrs.pop("ID", None), **attrs}
 

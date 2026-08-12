@@ -147,7 +147,7 @@ RESOURCES: dict[str, Resource] = {
         name="encode.ccre.v4",
         # ENCODE Registry of cCREs V4 (GRCh38) — the epigenomic node layer. Ships as a hosted
         # bgzip+tabix pair (like the GENCODE grove), so no on-the-fly indexing on a user's machine;
-        # canopy.ccres reads only a locus via the .tbi. Nature 2026, doi:10.1038/s41586-025-09909-9.
+        # genogrove_canopy.layers.ccres reads only a locus via the .tbi. Nature 2026, doi:10.1038/s41586-025-09909-9.
         # URLs are PENDING upload (Zenodo/HF); the pair is pre-seeded in the content-addressed
         # cache meanwhile, so resolve/indexed_path hit the cache and never fetch. The `.invalid`
         # host guarantees a loud failure (never a silent bad download) if the cache is ever cleared
@@ -218,7 +218,7 @@ def data_roots(names: Iterable[str]) -> list[str]:
 
 
 # --------------------------------------------------------------------------- #
-# Region access — bgzip + tabix so a query reads only its locus (see canopy.gff.
+# Region access — bgzip + tabix so a query reads only its locus (see genogrove_canopy.gff.
 # build_grove). GENCODE ships plain gzip, so we recompress + index once.
 # --------------------------------------------------------------------------- #
 
@@ -256,7 +256,7 @@ def indexed_path(name: str) -> Path:
     # Header ('#') lines first, then data sorted by (seqid, start) as tabix requires. A prepended
     # rank column breaks same-start ties into gene -> transcript -> children; without it sort falls
     # back to comparing whole lines, so a gene and its exon sharing a start come out alphabetically
-    # (exon, gene, transcript). Harmless for tabix and for the two-pass loader in canopy.gff, but
+    # (exon, gene, transcript). Harmless for tabix and for the two-pass loader in genogrove_canopy.gff, but
     # the file should read in nesting order. `cut` drops the rank again before bgzip.
     rank = r"""awk -F'\t' -v OFS='\t' '{r=($3=="gene")?1:($3=="transcript")?2:3; print r, $0}'"""
     pipeline = (
@@ -301,7 +301,7 @@ def ensure_all_grove(name: str) -> Path:
     gg.parent.mkdir(parents=True, exist_ok=True)
     if res.grove_url:  # download the pinned .gg (fast, reproducible)
         return _download(res.grove_url, res.grove_sha256, gg)
-    from canopy.gff import build_grove  # local fallback — no hosted grove pinned
+    from genogrove_canopy.gff import build_grove  # local fallback — no hosted grove pinned
 
     tmp = gg.with_name(gg.name + ".tmp")
     build_grove(indexed_path(name), region="").serialize(str(tmp))
@@ -320,7 +320,7 @@ def grove_view(name: str):
 
 # Bump when the baked Tier-1 layer set / a baked layer's node schema changes, OR when a
 # pygenogrove bump changes baked-grove correctness — so a stale combined grove is rebuilt rather
-# than served. Currently: GENCODE backbone + the ENCODE cCRE registry (canopy.layers.ccres) as
+# than served. Currently: GENCODE backbone + the ENCODE cCRE registry (genogrove_canopy.layers.ccres) as
 # `type:"regulatory_region", source:"ENCODE-SCREEN"` nodes. v2 = rebuilt under pygenogrove 0.7.4
 # (0.7.3 baked cCREs that weren't `intersect`-queryable — see ensure_baked_grove). v3 = cCRE
 # nodes moved off the ad-hoc `type:"ccre"` onto the SO term + a `source` tag.
@@ -347,7 +347,7 @@ def ensure_baked_grove(name: str) -> Path:
         return gg
     import pygenogrove as pg
 
-    from canopy.layers import ccres
+    from genogrove_canopy.layers import ccres
 
     # Reuse the pinned GENCODE `.gg` (fast) and insert the cCRE registry into it. Deserialize-then-
     # insert is valid as of pygenogrove **0.7.4** (engine 0.25.6), which fixed the large-batch
@@ -365,7 +365,7 @@ def ensure_baked_grove(name: str) -> Path:
     return gg
 
 
-# Bump when ``canopy.gff``'s grove model changes, so a stale `.gg` (valid pygenogrove
+# Bump when ``genogrove_canopy.gff``'s grove model changes, so a stale `.gg` (valid pygenogrove
 # but built from an older schema) is rebuilt rather than silently served. v2 = a feature's
 # `biotype` is its own (transcript_type on a transcript), exons carry none, and non-hierarchy
 # types keep their column-9 attributes + `source`.
@@ -386,10 +386,10 @@ def grove_index(name: str) -> tuple[dict[str, str], str]:
     chromosome plus a whole-genome ``_all.gg``. A query deserializes only the
     shard(s) for the chromosome(s) it touches (fast, low-memory); ``_all`` is the
     whole-genome grove for genome-wide or cross-chromosome queries. Built in one
-    streaming pass on first use (``canopy.gff.write_sharded_groves``) and cached under
+    streaming pass on first use (``genogrove_canopy.gff.write_sharded_groves``) and cached under
     ``<cache>/groves/<sha>.<schema>/``; bump ``_GROVE_SCHEMA`` for model changes.
     """
-    from canopy.gff import write_sharded_groves
+    from genogrove_canopy.gff import write_sharded_groves
 
     d = _grove_dir(name)
     if not (d / "_all.gg").exists():

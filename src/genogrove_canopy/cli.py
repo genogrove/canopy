@@ -2,7 +2,7 @@
 """Command-line entry point for canopy.
 
 A thin wrapper: parse the question, then orchestrate the three stages — generate
-Python (:mod:`canopy.llm`), execute it under restrictions (:mod:`canopy.sandbox`), and
+Python (:mod:`genogrove_canopy.llm`), execute it under restrictions (:mod:`genogrove_canopy.sandbox`), and
 print the result. The host resolves each dataset to a serialized ``.gg`` and
 injects its path as a variable; the generated code only deserializes and queries.
 """
@@ -15,7 +15,7 @@ import sys
 import time
 from pathlib import Path
 
-from canopy import __version__, llm, resources, sandbox
+from genogrove_canopy import __version__, llm, resources, sandbox
 
 # Default Anthropic model for code generation. Opus is the most capable tier and
 # the connected-interval reasoning here is the paper's headline contribution, so
@@ -23,7 +23,7 @@ from canopy import __version__, llm, resources, sandbox
 DEFAULT_MODEL = "claude-opus-4-8"
 
 # The base annotation grove. The regulatory (enhancer→gene) layer is augmented onto it
-# per cohort, on demand — see the rE2G helpers in ``canopy.resources``.
+# per cohort, on demand — see the rE2G helpers in ``genogrove_canopy.resources``.
 _BASE = "gencode.human"
 
 # When a question needs enhancers but names no tissue, load this cohort and say so.
@@ -121,7 +121,7 @@ def _grove_context():
     ``COHORT``/``TARGETS`` through the tabix index and injects only the needed enhancers as the
     ``ENHANCERS`` variable (defaulted to ``[]`` in the preamble so the code never ``NameError``s).
     """
-    from canopy import layers
+    from genogrove_canopy import layers
 
     var = "GENCODE_HUMAN"
     gg = str(resources.ensure_baked_grove(_BASE))
@@ -273,7 +273,7 @@ def _answer(question, *, system_prompt, preamble, args, execute):
         print(code, file=sys.stderr)
     enh_pre = ""
     if targets:  # an enhancer/regulation question — resolve the cohort and fetch its enhancers
-        from canopy.layers import enhancers
+        from genogrove_canopy.layers import enhancers
         cohorts, note = _resolve_query_cohorts(args, cohort_hint)
         cohort_ids = _cohort_ids(cohorts)
         records = enhancers.fetch_for_targets(targets, cohort_ids) if cohort_ids else []
@@ -334,7 +334,7 @@ def main(argv: list[str] | None = None) -> int:
     """Parse arguments and run the end-to-end loop. Returns a process exit code."""
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv and argv[0] == "serve":  # `canopy serve` — local web front-end over the same pipeline
-        from canopy import serve
+        from genogrove_canopy import serve
         return serve.main(argv[1:])
 
     parser = build_parser()

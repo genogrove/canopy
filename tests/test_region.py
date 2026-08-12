@@ -13,7 +13,7 @@ pg = pytest.importorskip("pygenogrove")
 if not (shutil.which("bgzip") and shutil.which("tabix")):
     pytest.skip("bgzip/tabix (htslib) not on PATH", allow_module_level=True)
 
-from canopy.gff import build_grove
+from genogrove_canopy.gff import build_grove
 
 GFF = (
     "##gff-version 3\n"

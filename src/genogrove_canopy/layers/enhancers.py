@@ -22,13 +22,14 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
-from canopy import resources
-from canopy.layers._base import Layer
+from genogrove_canopy import resources
+from genogrove_canopy.layers._base import Layer
 
 # The 3 GB index bundle lives in the cache (downloaded on demand later, like the GENCODE .gg);
 # present locally for now. gene_tss ships in the package (small).
 INDEX_DIR = resources._CACHE / "re2g_index"
-# Package data lives in canopy/data/; this module is now canopy/layers/, so go up one level.
+# Package data lives in genogrove_canopy/data/; this module is in genogrove_canopy/layers/,
+# so go up one level.
 _GENE_TSS = Path(__file__).parent.parent / "data" / "gene_tss.tsv.gz"
 
 # Per-row columns of the consolidated edge (the enhancer→gene record the indexes carry).

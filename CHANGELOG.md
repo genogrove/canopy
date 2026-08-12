@@ -54,3 +54,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   universal `grove<genomic_coordinate, json>` storing arbitrary JSON payloads, plus strand-aware
   `intersect`/`flanking` (predicate overload), `remove_key`/`compact`/counts, and typed
   `BedGrove`/`GffGrove` for C++ interop ([#4](https://github.com/genogrove/ask/pull/4)).
+- **Harmonized the import package with the distribution name**: `canopy` → `genogrove_canopy`,
+  matching the already-declared `genogrove-canopy` dist. PyPI `canopy` is taken by an actively
+  released project (9.10) that installs its own top-level `canopy/` directory, so co-installing
+  the two silently clobbered one or the other in `site-packages`. Flat rather than a
+  `genogrove.canopy` namespace package, since the bindings are a compiled top-level extension
+  module that cannot join a namespace without being rebuilt. The product name, the `canopy`
+  console script, and the paper's `genogrove canopy <question>` surface are unchanged; existing
+  environments need `uv sync` to regenerate the console script
+  ([#6](https://github.com/genogrove/canopy/pull/6)).

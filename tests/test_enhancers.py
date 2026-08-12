@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from canopy import llm
-from canopy.layers import enhancers
+from genogrove_canopy import llm
+from genogrove_canopy.layers import enhancers
 
 FLAGSHIP = "EFO:0005726"  # LNCaP
 

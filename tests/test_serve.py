@@ -14,7 +14,7 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 
-from canopy import serve
+from genogrove_canopy import serve
 
 
 def test_serve_cohort_precedence():
@@ -101,7 +101,7 @@ def test_cohort_default_flag_is_not_display_text(monkeypatch):
             "returncode": 0, "timed_out": False, "stdout": "ok: 1", "stderr": ""})()})()})())
     monkeypatch.setattr(serve.llm, "generate_query",
                         lambda q, sp, model=None: ("", [{"gene": "MYC"}], "pass"))
-    from canopy.layers import enhancers
+    from genogrove_canopy.layers import enhancers
     monkeypatch.setattr(enhancers, "fetch_for_targets", lambda targets, ids: [])
 
     result = serve._pipeline("enhancers of MYC", "", "m", lambda k, m: None)

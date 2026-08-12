@@ -99,7 +99,7 @@ The data layer in **Try it** below runs without a key.
 
 ## Try it: the GFF → Grove model
 
-The data layer (`canopy.gff` + `canopy.resources`) is implemented and tested — **no Claude /
+The data layer (`genogrove_canopy.gff` + `genogrove_canopy.resources`) is implemented and tested — **no Claude /
 API key needed.** After the `uv sync` above, run the loader tests against the real
 bindings (they `importorskip`, so they actually run here rather than skip):
 
@@ -113,7 +113,7 @@ Load a GENCODE locus and query it. Save this as `query.py`, then `uv run python 
 
 ```python
 import pygenogrove as pg
-from canopy import gff, resources
+from genogrove_canopy import gff, resources
 
 # Sub-second locus load via tabix (downloads the pre-indexed GENCODE — a few hundred MB — once):
 path = resources.indexed_path("gencode.human")   # bgzip+tabix GFF (+ .tbi), sha256-verified, cached
@@ -133,7 +133,7 @@ for k in g.intersect(q, "chr7"):
 
 Then traverse: `get_neighbors(gene)` gives transcripts (`contains`), and `first_exon` →
 `next` walks a transcript's splice chain, each exon carrying its `cds` range. The full
-schema is in [`prompts/system.md`](src/canopy/prompts/system.md) under "The GENCODE Grove model".
+schema is in [`prompts/system.md`](src/genogrove_canopy/prompts/system.md) under "The GENCODE Grove model".
 
 `build_grove(path, region)` reads only the locus, so it stays fast for any query that names
 one. For **genome-wide** questions (no locus — "count all protein-coding genes"), build the

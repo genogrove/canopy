@@ -29,8 +29,8 @@ from __future__ import annotations
 
 import subprocess
 
-from canopy import resources
-from canopy.layers._base import Layer
+from genogrove_canopy import resources
+from genogrove_canopy.layers._base import Layer
 
 _NAME = "encode.ccre.v4"  # RESOURCES catalog key (pinned hosted .bed.gz + .tbi)
 

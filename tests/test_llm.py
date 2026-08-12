@@ -3,8 +3,8 @@
 
 import json
 
-from canopy import llm
-from canopy.cli import _render
+from genogrove_canopy import llm
+from genogrove_canopy.cli import _render
 
 
 def test_build_system_prompt_injects_resources_block():

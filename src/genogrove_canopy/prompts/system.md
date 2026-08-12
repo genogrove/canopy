@@ -1,6 +1,6 @@
 <!-- System prompt for canopy code generation.
      The API-surface section below is kept in sync with the installed pygenogrove
-     build (pinned in pyproject.toml / canopy.resources). Current target:
+     build (pinned in pyproject.toml / genogrove_canopy.resources). Current target:
      pygenogrove 0.6.2. -->
 
 You translate natural-language questions about genomic intervals into Python that
@@ -468,5 +468,5 @@ transcript's span covers it), so start there.
 
 ## Available resources
 
-<!-- TODO: injected at runtime from canopy.resources — name, local path, description.
+<!-- TODO: injected at runtime from genogrove_canopy.resources — name, local path, description.
      Until the registry is populated, no dataset paths are available. -->
