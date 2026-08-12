@@ -47,7 +47,10 @@ class BuildPin:
     git_tag: str = ""  # human-readable tag at that commit, if any
 
 
-# Keep in lockstep with [tool.uv.sources] `rev` in pyproject.toml.
+# Keep in lockstep with [tool.uv.sources] `rev` in pyproject.toml, and with the "Current target:"
+# line in prompts/system.md — that header ships inside the system prompt, so a stale version tells
+# the model its documented API surface targets a build its generated code won't run against. All
+# four are asserted against each other by tests/test_resources_pins.py; bump them in one commit.
 PYGENOGROVE = BuildPin(
     name="pygenogrove",
     version="0.7.4",

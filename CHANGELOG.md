@@ -63,3 +63,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   console script, and the paper's `genogrove canopy <question>` surface are unchanged; existing
   environments need `uv sync` to regenerate the console script
   ([#6](https://github.com/genogrove/canopy/pull/6)).
+
+### Fixed
+- **`prompts/system.md` declared the wrong pinned build**: the header said "Current target:
+  pygenogrove 0.6.2" while the pin was 0.7.4. Because `system.md` *is* the system prompt, that
+  line shipped to the model on every request, telling it the documented API surface targeted a
+  build three releases behind the one its generated code runs against. `test_resources_pins.py`
+  now asserts the header version against `resources.PYGENOGROVE`, closing the one leg of the
+  Level 2 "all agree" invariant that had no guard
+  ([#7](https://github.com/genogrove/canopy/issues/7), [#8](https://github.com/genogrove/canopy/pull/8)).
