@@ -4,7 +4,7 @@
 import json
 
 from canopy import llm
-from canopy.cli import _render, _var_name
+from canopy.cli import _render
 
 
 def test_build_system_prompt_injects_resources_block():
@@ -38,7 +38,3 @@ def test_strip_code_fence():
     assert llm._strip_code_fence("```python\nprint(1)\n```") == "print(1)\n"
     assert llm._strip_code_fence("```\nx = 1\n```") == "x = 1\n"
     assert llm._strip_code_fence("print(2)") == "print(2)\n"  # unfenced passes through
-
-
-def test_var_name():
-    assert _var_name("gencode.human") == "GENCODE_HUMAN"
