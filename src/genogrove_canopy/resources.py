@@ -121,6 +121,11 @@ class Resource:
     # if the .gg format or the source annotation changes.
     grove_url: str = ""
     grove_sha256: str = ""
+    # Layers the pinned grove carries *beyond* the annotation itself, named for humans. A local
+    # build reads only `url`, so it cannot reproduce these — declaring them makes
+    # `ensure_all_grove` refuse to substitute a structurally different grove instead of silently
+    # returning one whose extra layers are simply absent (queries would come back empty, not error).
+    grove_layers: tuple[str, ...] = ()
 
 
 # Curated dataset catalog. Each entry pins an *immutable* release (an explicit
@@ -155,6 +160,7 @@ RESOURCES: dict[str, Resource] = {
             "/groves/gencode.v50+ccre.v4.grove-model.gg"
         ),
         grove_sha256="f1c53fe2d535eaaf698e159e4943e9195bbd36407a630b0ee4abf59c87c8e4e0",
+        grove_layers=("ENCODE cCRE registry (V4, GRCh38)",),
         description="GENCODE v50 comprehensive gene annotation, GRCh38 (GFF3, sorted + bgzip + tabix).",
     ),
     "encode.ccre.v4": Resource(
@@ -308,10 +314,15 @@ def _all_grove_gg(name: str) -> Path:
 def ensure_all_grove(name: str) -> Path:
     """Cache the whole-genome grove (`.gg`) if absent, returning its path.
 
-    Prefers the **pinned prebuilt grove** (``grove_url``): a ~90 MB sha-verified download
+    Prefers the **pinned prebuilt grove** (``grove_url``): a ~109 MB sha-verified download
     (seconds) instead of a local build. Falls back to building from the annotation
-    (``build_grove(region="")`` → serialize) — minutes, only if no grove is pinned. Either
-    way it's cached; located queries never trigger this.
+    (``build_grove(region="")`` → serialize) — minutes, and only when the resource declares no
+    ``grove_layers``, because a local build reads only the annotation and cannot reproduce them.
+    Either way it's cached; located queries never trigger this.
+
+    Raises ``RuntimeError`` rather than returning a grove that is missing declared layers: the
+    failure would otherwise be silent, since a query against an absent layer returns an empty
+    result rather than an error.
     """
     gg = _all_grove_gg(name)
     if gg.exists():
@@ -320,7 +331,15 @@ def ensure_all_grove(name: str) -> Path:
     gg.parent.mkdir(parents=True, exist_ok=True)
     if res.grove_url:  # download the pinned .gg (fast, reproducible)
         return _download(res.grove_url, res.grove_sha256, gg)
-    from genogrove_canopy.gff import build_grove  # local fallback — no hosted grove pinned
+    if res.grove_layers:
+        raise RuntimeError(
+            f"{name}: no `grove_url` is pinned, and a local build cannot reproduce this grove's "
+            f"extra layer(s): {', '.join(res.grove_layers)}. Building from the annotation alone "
+            "would return a structurally different grove whose queries come back empty instead of "
+            "failing. Pin the prebuilt artifact, or clear `grove_layers` if it is genuinely "
+            "annotation-only."
+        )
+    from genogrove_canopy.gff import build_grove  # local fallback — annotation-only resource
 
     tmp = gg.with_name(gg.name + ".tmp")
     build_grove(indexed_path(name), region="").serialize(str(tmp))
@@ -351,7 +370,17 @@ _GROVE_SCHEMA = "3"
 
 
 def _grove_dir(name: str) -> Path:
-    return _CACHE / "groves" / f"{RESOURCES[name].sha256}.{_GROVE_SCHEMA}"
+    """Directory for the **structure-only sharded index** — deliberately a *sibling* of the
+    directory holding the pinned whole-genome grove, not the same one.
+
+    They used to share both the directory and the `_all.gg` filename while being produced by
+    different code from different sources: `ensure_all_grove` downloads the pinned artifact
+    (annotation + its baked layers), while `grove_index` builds shards from the annotation alone,
+    filtered to ``{gene, transcript, exon}``. Sharing meant `grove_index` treated a downloaded
+    grove as proof its own shards existed, and `load_grove`'s rebuild-on-failure could delete the
+    verified pinned artifact and silently replace it with a structure-only one.
+    """
+    return _CACHE / "groves" / f"{RESOURCES[name].sha256}.{_GROVE_SCHEMA}.shards"
 
 
 def grove_index(name: str) -> tuple[dict[str, str], str]:
@@ -362,7 +391,12 @@ def grove_index(name: str) -> tuple[dict[str, str], str]:
     shard(s) for the chromosome(s) it touches (fast, low-memory); ``_all`` is the
     whole-genome grove for genome-wide or cross-chromosome queries. Built in one
     streaming pass on first use (``genogrove_canopy.gff.write_sharded_groves``) and cached under
-    ``<cache>/groves/<sha>.<schema>/``; bump ``_GROVE_SCHEMA`` for model changes.
+    ``<cache>/groves/<sha>.<schema>.shards/``; bump ``_GROVE_SCHEMA`` for model changes.
+
+    **Structure-only, and not a substitute for the shipped grove.** The build filters to
+    ``{gene, transcript, exon}``, so any layer the pinned artifact carries (the ENCODE cCREs)
+    is absent here by construction. Nothing in the query path uses this — ``_grove_context``
+    goes through ``ensure_all_grove``. Keep the two apart: see ``_grove_dir``.
     """
     from genogrove_canopy.gff import write_sharded_groves
 
@@ -390,14 +424,28 @@ def is_grove_cached(name: str) -> bool:
 
 
 def load_grove(name: str):
-    """Deserialize the whole-genome grove for ``name`` (cached). Self-heals once
-    if the cached index won't deserialize."""
+    """Deserialize the **structure-only** sharded grove for ``name`` (cached). Self-heals once if
+    the cached index won't deserialize.
+
+    The rebuild is destructive, so it is scoped to the shard directory (``_grove_dir``) — never the
+    directory holding the pinned artifact. It previously shared that directory, which meant a single
+    transient deserialize failure could delete the sha-verified download and replace it with a
+    structure-only rebuild, permanently and without a message.
+
+    Like the rest of the shard path this is not used by the query path; prefer
+    ``ensure_all_grove``/``grove_view``, which serve the pinned grove including its layers.
+    """
     import pygenogrove as pg
 
     try:
         return pg.Grove.deserialize(str(grove_path(name)))
     except Exception:
-        shutil.rmtree(_grove_dir(name), ignore_errors=True)  # nuke the index -> rebuild
+        if _grove_dir(name) == _all_grove_gg(name).parent:  # belt-and-braces: never fire
+            raise RuntimeError(
+                f"refusing to rebuild {name}: the shard directory is the same as the pinned "
+                "grove's, so the rebuild would delete a sha-verified artifact"
+            ) from None
+        shutil.rmtree(_grove_dir(name), ignore_errors=True)  # nuke the shard index -> rebuild
         return pg.Grove.deserialize(str(grove_path(name)))
 
 

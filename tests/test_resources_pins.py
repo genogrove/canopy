@@ -133,3 +133,56 @@ def test_pin_is_an_immutable_commit() -> None:
         "PYGENOGROVE.git_rev must be a full immutable commit SHA "
         f"(got {PYGENOGROVE.git_rev!r})"
     )
+
+
+def test_declared_grove_layers_cannot_be_silently_dropped(monkeypatch, tmp_path) -> None:
+    """A resource declaring `grove_layers` must refuse a local build, not return a lesser grove.
+
+    A local build reads only the annotation, so it cannot reproduce a baked layer. Returning one
+    anyway is the worst failure shape available: queries against the missing layer come back
+    **empty rather than failing**, so nothing upstream notices. Before #11 this could not happen
+    because the bake added the layer to whatever grove came back; removing the bake removed that
+    safety net, so the refusal replaces it.
+    """
+    import dataclasses
+
+    res = resources.RESOURCES["gencode.human"]
+    assert res.grove_layers, "gencode.human must declare the layers its pinned grove carries"
+
+    # Point the cache at an empty dir: `ensure_all_grove` returns early when the grove is already
+    # cached, so a warm cache never reaches the branch under test.
+    monkeypatch.setattr(resources, "_CACHE", tmp_path / "cache")
+    monkeypatch.setitem(
+        resources.RESOURCES, "gencode.human",
+        dataclasses.replace(res, grove_url="", grove_sha256=""),
+    )
+    try:
+        resources.ensure_all_grove("gencode.human")
+    except RuntimeError as exc:
+        assert "layer" in str(exc), f"refused, but not for the layer reason: {exc}"
+    else:
+        raise AssertionError(
+            "ensure_all_grove built a grove locally despite declared grove_layers — queries "
+            "against the absent layer would silently return empty"
+        )
+
+
+def test_shard_index_is_not_the_pinned_grove_directory() -> None:
+    """The structure-only shard index must live in a *different* directory from the pinned grove.
+
+    They shared a directory and the `_all.gg` filename while being built by different code from
+    different sources. Two consequences, both silent: `grove_index` treated a downloaded grove as
+    proof its own shards existed, and `load_grove`'s rebuild-on-failure deleted the whole directory
+    — destroying the sha-verified artifact and replacing it with a `{gene,transcript,exon}`-filtered
+    rebuild that has no cCREs.
+    """
+    for name in resources.RESOURCES:
+        shard_dir = resources._grove_dir(name)
+        pinned_dir = resources._all_grove_gg(name).parent
+        assert shard_dir != pinned_dir, (
+            f"{name}: shard index and pinned grove share {shard_dir} — a shard rebuild would "
+            "delete the pinned artifact"
+        )
+        assert pinned_dir not in shard_dir.parents, (
+            f"{name}: shard index nests inside the pinned grove's directory ({shard_dir})"
+        )

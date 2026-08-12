@@ -31,7 +31,10 @@ def _register(monkeypatch, tmp_path) -> str:
 
 
 def _all_gg(tmp_path, sha):
-    return tmp_path / "cache" / "groves" / f"{sha}.{resources._GROVE_SCHEMA}" / "_all.gg"
+    """The shard index's whole-genome grove — a *sibling* of the pinned grove's directory, so a
+    rebuild can never delete the sha-verified download (see `resources._grove_dir`)."""
+    return (tmp_path / "cache" / "groves"
+            / f"{sha}.{resources._GROVE_SCHEMA}.shards" / "_all.gg")
 
 
 def test_grove_index_builds_shards_and_whole(monkeypatch, tmp_path) -> None:
