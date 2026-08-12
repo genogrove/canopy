@@ -50,9 +50,9 @@ class BuildPin:
 # Keep in lockstep with [tool.uv.sources] `rev` in pyproject.toml.
 PYGENOGROVE = BuildPin(
     name="pygenogrove",
-    version="0.7.2",
-    git_rev="2584321499cb23f814456236f1c3564a2efa956c",
-    git_tag="v0.7.2",
+    version="0.7.4",
+    git_rev="f803f01f4a1f8ff1a6482461144d576b599fc481",
+    git_tag="v0.7.4",
 )
 
 
@@ -135,9 +135,30 @@ RESOURCES: dict[str, Resource] = {
         index_sha256="52020642c93f01c24488d98b446d705a655d31ea39339fad36cced3b9cc9480a",
         # Prebuilt grove: gene/transcript/exon + contains/first_exon/next edges, CDS folded
         # onto exons. pygenogrove v0.7.2, format 0.2. ~90 MB vs the 237 MB tabix GFF.
+        # STALE — built under the pre-`_GROVE_SCHEMA=2` model: exons are per-transcript (not
+        # deduped) and carry `id`/`biotype`/`cds`, and the chain edges have no `tx`. Every
+        # generated query now assumes otherwise, so this must be rebuilt and re-pinned; until
+        # then `ensure_all_grove` prefers it over a correct local build.
         grove_url="https://zenodo.org/api/records/21459419/files/gencode.v50.annotation.grove-fmt0.2.gg/content",
         grove_sha256="df0fca51476d974369db97159a7d4431bfa870d275eb159f4cb21466d3d1a47e",
         description="GENCODE v50 comprehensive gene annotation, GRCh38 (GFF3, sorted + bgzip + tabix).",
+    ),
+    "encode.ccre.v4": Resource(
+        name="encode.ccre.v4",
+        # ENCODE Registry of cCREs V4 (GRCh38) — the epigenomic node layer. Ships as a hosted
+        # bgzip+tabix pair (like the GENCODE grove), so no on-the-fly indexing on a user's machine;
+        # canopy.ccres reads only a locus via the .tbi. Nature 2026, doi:10.1038/s41586-025-09909-9.
+        # URLs are PENDING upload (Zenodo/HF); the pair is pre-seeded in the content-addressed
+        # cache meanwhile, so resolve/indexed_path hit the cache and never fetch. The `.invalid`
+        # host guarantees a loud failure (never a silent bad download) if the cache is ever cleared
+        # before the real URLs land. Replace both URLs once uploaded — the sha256s are final.
+        url="https://pending-upload.invalid/GRCh38-cCREs.v4.bed.gz",
+        sha256="9f33d157de568afffedc0b3bebd0b5aaa350e341cb18d5009d2fee6f4a8cee0d",
+        filename="GRCh38-cCREs.v4.bed.gz",
+        index_url="https://pending-upload.invalid/GRCh38-cCREs.v4.bed.gz.tbi",
+        index_sha256="485e642dd8f0fb97ff693157a54ef47e881cb31ee8dcfca54bea73bfb64721cd",
+        description="ENCODE Registry of cCREs V4, GRCh38 (2,348,854 elements; Nature 2026, "
+                    "doi:10.1038/s41586-025-09909-9).",
     ),
 }
 
@@ -232,9 +253,15 @@ def indexed_path(name: str) -> Path:
             )
     tmp = out.with_name("indexed.tmp.gff3.gz")
     q = shlex.quote(str(src))
-    # Header ('#') lines first, then data sorted by (seqid, start) as tabix requires.
+    # Header ('#') lines first, then data sorted by (seqid, start) as tabix requires. A prepended
+    # rank column breaks same-start ties into gene -> transcript -> children; without it sort falls
+    # back to comparing whole lines, so a gene and its exon sharing a start come out alphabetically
+    # (exon, gene, transcript). Harmless for tabix and for the two-pass loader in canopy.gff, but
+    # the file should read in nesting order. `cut` drops the rank again before bgzip.
+    rank = r"""awk -F'\t' -v OFS='\t' '{r=($3=="gene")?1:($3=="transcript")?2:3; print r, $0}'"""
     pipeline = (
-        f"{{ gzip -dc {q} | grep '^#' ; gzip -dc {q} | grep -v '^#' | sort -k1,1 -k4,4n ; }} "
+        f"{{ gzip -dc {q} | grep '^#' ; "
+        f"gzip -dc {q} | grep -v '^#' | {rank} | sort -k2,2 -k5,5n -k1,1n | cut -f2- ; }} "
         f"| bgzip -c > {shlex.quote(str(tmp))}"
     )
     subprocess.run(pipeline, shell=True, check=True)  # noqa: S602 — our own quoted paths
@@ -291,9 +318,61 @@ def grove_view(name: str):
     return pg.GroveView.open(str(ensure_all_grove(name)))
 
 
+# Bump when the baked Tier-1 layer set / a baked layer's node schema changes, OR when a
+# pygenogrove bump changes baked-grove correctness — so a stale combined grove is rebuilt rather
+# than served. Currently: GENCODE backbone + the ENCODE cCRE registry (canopy.layers.ccres) as
+# `type:"regulatory_region", source:"ENCODE-SCREEN"` nodes. v2 = rebuilt under pygenogrove 0.7.4
+# (0.7.3 baked cCREs that weren't `intersect`-queryable — see ensure_baked_grove). v3 = cCRE
+# nodes moved off the ad-hoc `type:"ccre"` onto the SO term + a `source` tag.
+_BAKED_SCHEMA = "3"
+
+
+def _baked_grove_gg(name: str) -> Path:
+    """Path to the shipped grove = backbone + Tier-1 baked layers (may not exist yet)."""
+    return _all_grove_gg(name).with_name(f"_all+baked{_BAKED_SCHEMA}.gg")
+
+
+def ensure_baked_grove(name: str) -> Path:
+    """The shipped/live grove: the GENCODE backbone with the Tier-1 **static** layers baked in as
+    nodes (currently the ENCODE cCRE registry, ~2.35M `type:"ccre"` nodes). Built once and cached.
+
+    Deserialize the pinned GENCODE `.gg`, insert every cCRE as a node, reserialize. A `GroveView`
+    then returns cCREs on `intersect` alongside genes with **zero** query-time work — the layer is
+    genuinely in the one structure, and the warm-worker read path is unchanged. cCREs are static
+    (one registry, no cohort/tissue axis), so baking beats per-query fetch; large/dynamic layers
+    (enhancers, JASPAR) stay out of the grove and are fetched per query/locus instead.
+    """
+    gg = _baked_grove_gg(name)
+    if gg.exists():
+        return gg
+    import pygenogrove as pg
+
+    from canopy.layers import ccres
+
+    # Reuse the pinned GENCODE `.gg` (fast) and insert the cCRE registry into it. Deserialize-then-
+    # insert is valid as of pygenogrove **0.7.4** (engine 0.25.6), which fixed the large-batch
+    # insert-indexing bug (#68): on 0.7.3 the 2.35M inserts were stored and counted but not
+    # `intersect`-queryable, and serialize preserved the broken index. So the `PYGENOGROVE == 0.7.4`
+    # pin is load-bearing for this build to be correct — a stale grove baked under 0.7.3 must be
+    # discarded (bump `_BAKED_SCHEMA`).
+    base = ensure_all_grove(name)          # the pinned GENCODE .gg (download or local build)
+    g = pg.Grove.deserialize(str(base))
+    ccres.attach(g, ccres.all_records())   # + ~2.35M `source:"ENCODE-SCREEN"` nodes
+    gg.parent.mkdir(parents=True, exist_ok=True)
+    tmp = gg.with_name(gg.name + ".tmp")
+    g.serialize(str(tmp))
+    tmp.replace(gg)  # commit the baked grove atomically
+    return gg
+
+
 # Bump when ``canopy.gff``'s grove model changes, so a stale `.gg` (valid pygenogrove
-# but built from an older schema) is rebuilt rather than silently served.
-_GROVE_SCHEMA = "1"
+# but built from an older schema) is rebuilt rather than silently served. v2 = a feature's
+# `biotype` is its own (transcript_type on a transcript), exons carry none, and non-hierarchy
+# types keep their column-9 attributes + `source`.
+# NOTE: this only invalidates *locally built* groves. `ensure_all_grove` prefers the pinned
+# prebuilt `.gg` (`Resource.grove_url`), which was serialized under the old model — that hosted
+# artifact has to be rebuilt and re-pinned before the shipped grove reflects any of this.
+_GROVE_SCHEMA = "2"
 
 
 def _grove_dir(name: str) -> Path:
@@ -633,18 +712,26 @@ def augmented_grove_path(base_name: str, cohorts) -> Path:
     different cohort set — or a schema bump — is a different grove, and the same set reuses
     the cache. Lets a caller check ``.exists()`` before triggering the (slow, first-run)
     build in ``ensure_augmented_grove``.
+
+    The accession set is hashed, not spelled out: a whole-tissue cohort can carry 60+
+    replicates, and joining them would overflow the 255-byte filename limit (errno 63).
     """
     all_accs = sorted(a for accs in cohorts.values() for a in accs)
-    return _all_grove_gg(base_name).with_name(f"+re2g{_RE2G_SCHEMA}-" + "-".join(all_accs) + ".gg")
+    digest = hashlib.sha256("-".join(all_accs).encode()).hexdigest()[:16]
+    return _all_grove_gg(base_name).with_name(f"+re2g{_RE2G_SCHEMA}-{digest}.gg")
 
 
-def ensure_augmented_grove(base_name: str, cohorts) -> Path:
+def ensure_augmented_grove(base_name: str, cohorts, progress=None) -> Path:
     """Build + cache the combined grove = ``base_name``'s GENCODE grove augmented with the
     given **cohorts**. ``cohorts`` maps a cohort label → its replicate accession list (e.g.
     from ``re2g_cohorts()``); each replicate's BED is fetched and merged (per-cohort ``score``
     = max, ``n`` = replicate support, held in a ``byCohort`` edge map). Returns the `.gg`
     path, built once and cached keyed by the full cohort/accession set. Fetching needs htslib
     + network; the query path only opens the resulting local `.gg` via ``GroveView``.
+
+    ``progress`` is an optional ``(kind, done, total, label)`` callback for a caller that wants
+    to show build steps (``kind`` in ``"fetch"``/``"augment"``/``"serialize"``): a
+    whole-tissue cohort fetches 60+ replicate tracks, so the build is slow and worth narrating.
     """
     gg = augmented_grove_path(base_name, cohorts)
     if gg.exists():
@@ -652,8 +739,22 @@ def ensure_augmented_grove(base_name: str, cohorts) -> Path:
     base_gg = ensure_all_grove(base_name)  # the pinned GENCODE .gg
     gg.parent.mkdir(parents=True, exist_ok=True)
     tmp = gg.with_name(gg.name + ".tmp")
-    edge_sets = {label: [re2g_edges(a, "") for a in sorted(accs)] for label, accs in cohorts.items()}
+    total = sum(len(accs) for accs in cohorts.values())
+    done = 0
+    edge_sets = {}
+    for label, accs in cohorts.items():
+        edges = []
+        for a in sorted(accs):
+            edges.append(re2g_edges(a, ""))
+            done += 1
+            if progress:
+                progress("fetch", done, total, label)
+        edge_sets[label] = edges
+    if progress:
+        progress("augment", total, total, None)
     grove, _stats = augment_grove(base_gg, edge_sets)
+    if progress:
+        progress("serialize", total, total, None)
     grove.serialize(str(tmp))
     tmp.replace(gg)
     return gg

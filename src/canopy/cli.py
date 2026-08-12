@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 import time
 from pathlib import Path
@@ -27,17 +26,8 @@ DEFAULT_MODEL = "claude-opus-4-8"
 # per cohort, on demand — see the rE2G helpers in ``canopy.resources``.
 _BASE = "gencode.human"
 
-# When a question needs enhancers but names no tissue, augment with this cohort and say so.
+# When a question needs enhancers but names no tissue, load this cohort and say so.
 DEFAULT_COHORT = "EFO:0005726"  # LNCaP clone FGC (prostate cancer) — the flagship cohort
-
-# A question wants the regulatory layer if it mentions it. Cheap intent check (no extra LLM
-# call): gene/transcript/exon questions stay on plain GENCODE; only these pull a cohort.
-_ENHANCER_HINT = re.compile(r"enhanc|regulat|cis-?reg|\bccre\b|\bcre\b|regulatory element", re.I)
-
-
-def _wants_enhancers(question: str) -> bool:
-    """True if the question asks about the regulatory layer (enhancers / regulation)."""
-    return bool(_ENHANCER_HINT.search(question or ""))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -121,57 +111,42 @@ def _list_cohorts() -> None:
         print(f"{c['ontology_id']:16}  {c['n_replicates']:>4}  {c['type']:16}  {c['name']}")
 
 
-def _grove_context(cohorts):
-    """Resolve the grove to (resources_block, code_preamble, data_paths, note).
+def _grove_context():
+    """Resolve the shipped grove to ``(resources_block, code_preamble, data_paths)``.
 
-    ``cohorts`` is ``{name: [accessions]}`` (empty → plain GENCODE). A non-empty set augments
-    GENCODE with those cohorts' rE2G enhancer→gene edges (built/cached on first use) and adds
-    the regulatory layer to the prompt. One handle, ``GENCODE_HUMAN``, is injected either way;
-    the query opens it lazily with ``pg.GroveView.open``. ``note`` (for the user) names the
-    cohorts, or is empty for a plain-GENCODE run.
+    The grove is the GENCODE backbone with the **Tier-1 static layers baked in** as nodes
+    (currently the ENCODE cCRE registry) — see ``resources.ensure_baked_grove``. So a `intersect`
+    returns genes *and* cCREs from one handle, ``GENCODE_HUMAN``, opened lazily. The enhancer layer
+    is **not** in the grove (it is dynamic/cohort-specific): the host resolves the model's declared
+    ``COHORT``/``TARGETS`` through the tabix index and injects only the needed enhancers as the
+    ``ENHANCERS`` variable (defaulted to ``[]`` in the preamble so the code never ``NameError``s).
     """
+    from canopy import layers
+
     var = "GENCODE_HUMAN"
-    if cohorts:
-        gg = str(resources.ensure_augmented_grove(_BASE, cohorts))
-        labels = "; ".join(cohorts)
-        block = (
-            f"- `{var}` (str): a **combined grove** — GENCODE gene/transcript/exon structure "
-            f"PLUS the ENCODE-rE2G enhancer→gene layer for cohort(s): **{labels}**. Open it "
-            f"lazily with `g = pg.GroveView.open({var})`.\n"
-            f"  - **Enhancer nodes** carry `{{'type':'enhancer','class':...}}` and are spatially "
-            f"indexed, so `intersect` at a variant/region returns them alongside genes.\n"
-            f"  - **Edges** (filter by `rel` with `get_neighbors_if`): `regulates` "
-            f"(enhancer→gene) and its reverse `regulated_by` (gene→enhancer, for 'enhancers of "
-            f"a gene'). Each carries `byCohort`: `{{'<cohort>': {{'score': <rE2G confidence>, "
-            f"'n': <replicates supporting it>}}}}`. Rank/threshold on `score`; use `n` for "
-            f"confidence; a link with `class=='promoter'` and ~0 distance is a self-promoter.\n"
-            f"  - GENCODE structure is unchanged (see \"The GENCODE Grove model\" above): a "
-            f"gene node reached via `regulated_by` still has its `first_exon`/`next` chain.\n"
-            f"  - **Return the evidence, not bare intervals.** Each enhancer result record must "
-            f"carry the connection: `type` (`\"enhancer\"`), `class`, the connected gene's "
-            f"`name`, and from the relevant `byCohort` entry the `score` (put it in a `score` "
-            f"field) and `n` and cohort label. Give it a descriptive `name` too, e.g. "
-            f"`f\"enh:{{cls}}→{{gene}}\"`. A `.`-only interval with no score/target is not an "
-            f"answer. Sort by `n` then `score` so the confident links lead."
-        )
-        note = f"Enhancers loaded for cohort(s): {labels}."
-    else:
-        gg = str(resources.ensure_all_grove(_BASE))
-        block = (
-            f"- `{var}` (str): path to the GENCODE grove "
-            f"({resources.RESOURCES[_BASE].description}) — open it lazily with "
-            f"`g = pg.GroveView.open({var})`. A **located** query (a variant at chr7:55191822) "
-            f"reads just that locus; a **genome-wide / gene-name** query works from the same "
-            f"handle. Query-only: `intersect`, `flanking`, `get_neighbors`, `get_edges`, "
-            f'`get_neighbors_if`. See "The GENCODE Grove model" above for the node/edge structure.'
-        )
-        note = ""
-    return block, f"{var} = {json.dumps(gg)}\n", [gg], note
+    gg = str(resources.ensure_baked_grove(_BASE))
+    block = (
+        f"- `{var}` (str): path to the shipped grove "
+        f"({resources.RESOURCES[_BASE].description}) — gene/transcript/exon structure **plus "
+        f"baked-in ENCODE cCRE nodes**. Open it lazily with `g = pg.GroveView.open({var})`. A "
+        f"**located** query (a variant at chr7:55191822) reads just that locus; a **genome-wide / "
+        f"gene-name** query works from the same handle. Query-only: `intersect`, `flanking`, "
+        f"`get_neighbors`, `get_edges`, `get_neighbors_if`.\n"
+        f"  Baked node layers — returned by `intersect` alongside genes, filter on `type`:\n"
+        f"  {layers.catalogue_block(['ccre'])}\n"
+        f"- `ENHANCERS` (list): the ENCODE-rE2G enhancer→gene links for the `COHORT`/`TARGETS` you "
+        f"declare (see \"Enhancers\"). Empty `[]` unless the question is about enhancers/regulation."
+    )
+    preamble = f"{var} = {json.dumps(gg)}\nENHANCERS = []\n"
+    return block, preamble, [gg]
 
 
-def _render(text: str, fmt: str) -> str:
-    """Render the generated code's stdout. Non-JSON lines (the agent's ``label: value``
-    summary) **lead**, then the JSONL feature records become the chosen ``fmt`` table."""
+def _parse_output(text: str):
+    """Split the generated code's stdout into ``(records, passthrough)``.
+
+    JSONL dict lines are the feature records; every other non-empty line is the agent's
+    ``label: value`` summary. Shared by the text renderer and the ``serve`` web layer (which
+    wants the records as structured data to draw, not a pre-formatted table)."""
     records, passthrough = [], []
     for line in text.splitlines():
         s = line.strip()
@@ -185,6 +160,13 @@ def _render(text: str, fmt: str) -> str:
             records.append(obj)
         else:
             passthrough.append(line)  # a summary / scalar line — shown before the table
+    return records, passthrough
+
+
+def _render(text: str, fmt: str) -> str:
+    """Render the generated code's stdout. Non-JSON lines (the agent's ``label: value``
+    summary) **lead**, then the JSONL feature records become the chosen ``fmt`` table."""
+    records, passthrough = _parse_output(text)
     out = list(passthrough)
     if records:
         out.append(_format_records(records, fmt))
@@ -241,24 +223,35 @@ def _pygenogrove_site_dir() -> str:
     return str(f.parent.parent if f.name == "__init__.py" else f.parent)
 
 
-def _cohorts_for(args):
-    """Decide which cohorts to load: explicit ``--cohort``, else the default cohort when a
-    one-shot question asks about enhancers, else none (plain GENCODE). Returns
-    ``{cohort name: [accessions]}`` (empty for a plain-GENCODE run)."""
+def _resolve_query_cohorts(args, cohort_hint):
+    """Grounded cohort resolution for a query that needs enhancers, precedence-ordered:
+    ``--cohort`` override → the model's declared ``COHORT`` (matched against the catalog; no
+    match → none, so a wrong tissue is never silently substituted) → the default cohort.
+    Returns ``({name: accessions}, note)`` where ``note`` is a stderr line or ``None``."""
     if args.cohort:
-        return _resolve_cohorts(args.cohort)
-    if not args.interactive and _wants_enhancers(args.question):
-        return _resolve_cohorts([DEFAULT_COHORT])  # enhancer question, no tissue named
-    return {}
+        return _resolve_cohorts(args.cohort), None
+    if cohort_hint:
+        try:
+            return _resolve_cohorts([cohort_hint]), None
+        except SystemExit:  # the model named a tissue with no catalog match — don't substitute
+            return {}, f"no ENCODE cohort matched {cohort_hint!r} — no enhancers loaded (see --list-cohorts)"
+    return _resolve_cohorts([DEFAULT_COHORT]), "default"
 
 
-def _prepare(cohorts) -> None:
-    """Print a first-run notice if the grove(s) this run needs aren't cached yet."""
-    if not resources._all_grove_gg(_BASE).exists():
-        print(f"Fetching {_BASE} grove (first run only: a pinned ~90 MB .gg)…", file=sys.stderr)
-    if cohorts and not resources.augmented_grove_path(_BASE, cohorts).exists():
-        print(f"Building the enhancer grove for {', '.join(cohorts)} "
-              "(first run: ENCODE download + augment)…", file=sys.stderr)
+def _prepare() -> None:
+    """First-run notice if the shipped grove isn't baked yet: download the pinned ~90 MB GENCODE
+    `.gg` and bake in the cCRE layer (a one-time ~1 min build)."""
+    if not resources._baked_grove_gg(_BASE).exists():
+        print(f"Preparing the {_BASE} grove (first run only: a pinned ~90 MB .gg + baking cCREs)…",
+              file=sys.stderr)
+
+
+def _cohort_ids(cohorts) -> list:
+    """Ontology ids for the selected cohort **names** — the enhancer index is keyed by id."""
+    if not cohorts:
+        return []
+    name2id = {c["name"]: c["ontology_id"] for c in resources.re2g_cohorts()}
+    return [name2id[n] for n in cohorts if n in name2id]
 
 
 def _answer(question, *, system_prompt, preamble, args, execute):
@@ -267,17 +260,34 @@ def _answer(question, *, system_prompt, preamble, args, execute):
     ``execute`` is a ``script -> SandboxResult`` callable (``sandbox.run`` for one-shot,
     ``Worker.submit`` for interactive). Returns ``(rendered_stdout, error_msg, gen_s, exec_s)``
     — exactly one of stdout/error is non-empty; the two times split code-gen from execution.
+
+    The enhancer layer is resolved **per question**: the model declares ``COHORT``/``TARGETS``,
+    the host grounds the cohort (``--cohort`` overrides), fetches only those enhancers via the
+    tabix index, and injects them as ``ENHANCERS`` — no whole-cohort grove augment.
     """
     t0 = time.perf_counter()
-    code = llm.generate_query(question, system_prompt, model=args.model)
+    cohort_hint, targets, code = llm.generate_query(question, system_prompt, model=args.model)
     gen_s = time.perf_counter() - t0
     if args.show_code:
         print("# --- generated code ---", file=sys.stderr)
         print(code, file=sys.stderr)
+    enh_pre = ""
+    if targets:  # an enhancer/regulation question — resolve the cohort and fetch its enhancers
+        from canopy.layers import enhancers
+        cohorts, note = _resolve_query_cohorts(args, cohort_hint)
+        cohort_ids = _cohort_ids(cohorts)
+        records = enhancers.fetch_for_targets(targets, cohort_ids) if cohort_ids else []
+        if records:
+            enh_pre = enhancers.preamble(records)
+            src = " (default — name a tissue or pass --cohort)" if note == "default" else ""
+            print(f"Enhancers: {len(records)} links from cohort(s) {'; '.join(cohorts)}{src}.",
+                  file=sys.stderr)
+        elif note and note != "default":
+            print(note, file=sys.stderr)
     # JSONL is the output contract, so guarantee `json` is importable even if the
     # generated code forgets the import (it's already in the allowlist).
     t1 = time.perf_counter()
-    result = execute("import json\n" + preamble + code)
+    result = execute("import json\n" + preamble + enh_pre + code)
     exec_s = time.perf_counter() - t1
     if result.returncode != 0 or result.timed_out:
         return "", (result.stderr.strip() or "(the generated code failed with no output)"), gen_s, exec_s
@@ -322,6 +332,11 @@ def _interactive(args, *, system_prompt, preamble, data_paths, site_dir) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """Parse arguments and run the end-to-end loop. Returns a process exit code."""
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and argv[0] == "serve":  # `canopy serve` — local web front-end over the same pipeline
+        from canopy import serve
+        return serve.main(argv[1:])
+
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -329,10 +344,10 @@ def main(argv: list[str] | None = None) -> int:
         _list_cohorts()
         return 0
 
-    if args.init:  # prime the base grove ahead of first use, then exit
+    if args.init:  # prime the shipped grove (GENCODE + baked cCREs) ahead of first use, then exit
         try:
-            _prepare({})
-            resources.ensure_all_grove(_BASE)
+            _prepare()
+            resources.ensure_baked_grove(_BASE)
         except Exception as exc:
             print(f"canopy: {exc}", file=sys.stderr)
             return 1
@@ -344,11 +359,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        # Pick the cohort(s) this run needs, then make the grove local (base .gg download +,
-        # if a cohort is needed, the augmented build). The query opens it via GroveView.
-        cohorts = _cohorts_for(args)
-        _prepare(cohorts)
-        resources_block, preamble, data_paths, note = _grove_context(cohorts)
+        # The grove is cohort-independent (GENCODE + baked cCREs). Enhancers are resolved
+        # per question from the model's declared COHORT/TARGETS — see _answer.
+        _prepare()
+        resources_block, preamble, data_paths = _grove_context()
         site_dir = _pygenogrove_site_dir()
         system_prompt = llm.build_system_prompt(resources_block)
     except SystemExit:
@@ -356,11 +370,6 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # surface a clean message, not a traceback
         print(f"canopy: {exc}", file=sys.stderr)
         return 1
-
-    if note:  # tell the user which cohort's enhancers are in play (esp. the default)
-        default_used = not args.cohort
-        print(note + (" (default — pass --cohort to choose another; --list-cohorts to see them)"
-                      if default_used else ""), file=sys.stderr)
 
     if args.interactive:  # warm worker: grove open paid once for the whole session
         return _interactive(args, system_prompt=system_prompt, preamble=preamble,

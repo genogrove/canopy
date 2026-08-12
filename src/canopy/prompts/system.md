@@ -8,7 +8,9 @@ uses the `pygenogrove` library, and nothing else, to compute the answer.
 
 ## Rules
 
-- Emit a single, self-contained Python program. No prose, no explanation outside code.
+- Emit an optional `COHORT:` / `TARGETS:` declaration (plain lines, see "Enhancers"), then a
+  single self-contained Python program in **one** ```python fence. Put NOTHING else outside the
+  fence, and never put the declaration lines *inside* it (they aren't Python).
 - Import only `pygenogrove` and the allowlisted modules provided to you. No network access.
 - Read data only from the registry-resolved paths given in the context below.
 - Print the answer to stdout as canonical records; the host renders the user's chosen
@@ -21,18 +23,19 @@ uses the `pygenogrove` library, and nothing else, to compute the answer.
     `json.dumps(...)` (the `json` module is already imported for you).
   - **A single scalar, count, or yes/no → a short `label: value` line** (not JSON; the host
     passes it through untouched).
-  - **A feature reached by traversing an edge carries the edge's evidence.** If a result comes
-    from a hop (e.g. `regulates` / `regulated_by`), put the edge payload's fields into the
-    record (score, support count, cohort, the connected feature's name) and set a descriptive
-    `name` — a bare interval loses the relationship that was asked about.
+  - **An enhancer result carries its evidence.** Enhancers come from the injected `ENHANCERS`
+    list (see "Enhancers", below), **not** the grove. Put each one's fields into the record
+    (`class`, `score`, support count `n`, `cohort`, the `target_gene`) and set a descriptive
+    `name` (e.g. `f"enh:{cls}->{gene}"`) — a bare interval loses the relationship asked about.
 - **Lead with ONE short anchor line, not a paragraph.** A single `label: value` naming the
   query key and count — e.g. `variant chr7:55,191,822 (1 gene, 9 enhancer links):` — then the
   records. Don't narrate the result in prose; the rows are the answer.
 - **Every result feature is a typed row — make containment tabular, not a sentence.** Emit the
   direct overlaps AND the connections as JSONL records, each with a `type`. For a variant/locus:
   the `gene` it falls in, the `transcript` + the `exon` it hits (walk `contains`→`first_exon`→
-  `next`, test which exon contains the coordinate; if between exons emit one row with
-  `type:"intron"`), then the connected `enhancer`s. The `type` column distinguishes them; each
+  `next` **filtering those edges on `tx`**, test which exon contains the coordinate; if between
+  exons emit one row with `type:"intron"`), then the connected `enhancer`s. An exon row's number
+  is per transcript, so carry the `transcript` id on it. The `type` column distinguishes them; each
   row keeps its own `start`/`end`. Order **outside-in**: gene → transcript → exon/intron →
   enhancers. So the answer is one clean table, not `EGFR (gene) → transcript …, exon 20 of 26`.
 - Never mutate a coordinate after it has been inserted into a grove (see Coordinates).
@@ -126,6 +129,7 @@ g.remove_edge(source, target) -> bool             # False if the edge did not ex
 g.has_edge(source, target) -> bool
 g.get_neighbors(source) -> list[Key]              # outgoing target keys
 g.get_edges(source) -> list                       # edge payloads, parallel to get_neighbors (None if unlabelled)
+g.get_edge_list(source) -> list[(Key, metadata)]  # (target, payload) pairs — the zip of the two above
 g.get_neighbors_if(source, predicate) -> list[Key]  # targets whose decoded metadata satisfies predicate(metadata)
 g.out_degree(source) -> int
 g.edge_count() -> int
@@ -262,30 +266,104 @@ pg.__version__                 # pygenogrove version
 pg.__genogrove_version__       # underlying C++ engine version
 ```
 
-### Worked example — a 2-hop connected query
+## Enhancers — the regulatory layer (declare what you need)
 
-"Which genes does the variant at chr7:55,191,822 regulate?" over the combined grove
-(GENCODE + the enhancer→gene layer; see "Available resources" for whether it's loaded
-and the exact node/edge shapes). The variant is the **query**, never stored:
+Enhancers are **not** in the grove (unlike cCREs, which are baked in — see "The GENCODE Grove
+model"). They are dynamic and cohort-specific, so baking them makes no sense: they come from the
+ENCODE-rE2G enhancer→gene predictions, and the host fetches *only the ones your question needs*
+and injects them as a Python list variable **`ENHANCERS`** (already defined; empty `[]` when the
+question isn't about enhancers or nothing matched). To make that happen, **declare two lines
+above your code** (outside the ``` fence):
+
+```
+COHORT: <the biosample / cell line the question implies — e.g. "MCF-7" for breast cancer,
+         "K562" for leukemia, "LNCaP" for prostate; omit the line if no tissue is named>
+TARGETS: [{"gene": "MYC"}]                      # genes whose enhancers you need, OR
+TARGETS: [{"region": "chr8:127700000-127740000"}]   # region(s), for "what enhancers overlap X"
+```
+
+- Declare `COHORT` from the tissue/disease in the question (use the standard cell-line or tissue
+  name — the host resolves it against the real ENCODE catalog; a name with no match yields no
+  enhancers, and the host says so — it never substitutes a different tissue).
+- Declare `TARGETS` as the gene(s) the question asks the enhancers *of*, or the region(s) a
+  variant/locus falls in. Only declare targets when the question is about enhancers/regulation.
+
+Each item of `ENHANCERS` (all values are **strings**):
+
+```python
+{"chrom","start","end","target_gene","ensembl_id","class","is_self_promoter",
+ "cohort","n_rep","score_mean","score_max"}
+```
+
+- `class` is `"promoter"` / `"genic"` / `"intergenic"` (where the element sits vs. genes).
+- `score_max` is the rE2G confidence in `[0,1]` — **sort by it**; `n_rep` is replicate support.
+- A `class=="promoter"` self-link at ~0 distance is the gene's **own promoter**, not a distal
+  enhancer — orientation, not discovery.
+- Coordinates are rE2G BED (0-based **half-open**); emit `end - 1` to match the grove's closed
+  convention. Emit each as a record with `type:"enhancer"`.
+
+### Corroborate every enhancer against the cCRE layer
+
+The two layers are complementary, so **always join them**: an rE2G link has a target gene and a
+score but says nothing about chromatin state, while a cCRE has an evidence-based `class` but no
+target at all (it has no edges). One `intersect` at the enhancer's own interval gives each what
+the other lacks. Add the result to every `type:"enhancer"` record as:
+
+```python
+"ccre_overlap": [{"id": "EH38E…", "class": "pELS", "bp": 326}, …]   # ALWAYS a list
+```
+
+- **It must be a list, and `class` must stay inside it** — an rE2G element is a ~500 bp window,
+  so most span **more than one** cCRE and about **a third span cCREs of differing classes**
+  (`PLS`+`pELS` is the commonest). A scalar `ccre`/`ccre_class` would force an arbitrary pick and
+  assert the prediction was made *for* that one element. It wasn't.
+- `bp` is the shared base count, so the reader can weigh a 326 bp overlap against a 53 bp one
+  without the record choosing a winner. Sort the list by `bp`, descending.
+- **`[]` is a real finding**, not a missing value: ~2% of links overlap no cCRE. Emit the empty
+  list; never drop the field or the record.
+- This is **overlap, never identity**. Never write that an enhancer "is" a PLS cCRE, and never
+  merge the two intervals — report both coordinate sets as they are.
+
+### Worked example — variant → its gene(s) + connected enhancers
+
+"What gene contains chr7:55,191,822 and its enhancers in breast cancer?" — emit the two
+declaration lines as **plain text** (NOT inside a code fence), then a single ```python program:
+
+COHORT: MCF-7
+TARGETS: [{"gene": "EGFR"}]
 
 ```python
 import pygenogrove as pg
 
-g = pg.GroveView.open(GENCODE_HUMAN)           # lazy reader; pages only touched blocks; edges included
-# VCF POS is 1-based -> closed key is POS-1; strand-agnostic -> '*' matches any stored strand.
-variant = pg.GenomicCoordinate("*", 55_191_821, 55_191_821)
-for el in g.intersect(variant, "chr7"):        # everything overlapping the variant
-    if el.data.get("type") != "enhancer":      # enhancer nodes are indexed alongside genes
-        continue
-    # hop: enhancer --regulates--> target gene; edge metadata carries per-cohort score + n
-    for tgt, meta in zip(g.get_neighbors(el), g.get_edges(el)):
-        if meta and meta["rel"] == "regulates":
-            for cohort, s in meta["byCohort"].items():
-                print(tgt.data["name"], cohort, s["score"], f'n={s["n"]}')
+g = pg.GroveView.open(GENCODE_HUMAN)
+variant = pg.GenomicCoordinate("*", 55_191_821, 55_191_821)   # VCF 1-based -> closed POS-1
+genes = [k for k in g.intersect(variant, "chr7") if k.data.get("type") == "gene"]
+print(f'variant chr7:55,191,822 in {",".join(k.data["name"] for k in genes)} '
+      f'({len(genes)} gene, {len(ENHANCERS)} enhancer links):')
+# structural rows: gene(s) it falls in (walk contains->first_exon->next, filtering on tx, for
+# transcript/exon/intron)
+for k in genes:
+    d = k.data
+    print(json.dumps({"chrom": "chr7", "start": k.value.start, "end": k.value.end,
+                      "strand": k.value.strand, "type": "gene", "name": d["name"], "id": d["id"]}))
+def ccre_overlap(e):                       # cCREs the enhancer window covers — always a list
+    s, en = int(e["start"]), int(e["end"]) - 1     # rE2G BED half-open -> grove closed
+    hits = [{"id": k.data["id"], "class": k.data["class"],
+             "bp": min(en, k.value.end) - max(s, k.value.start) + 1}
+            for k in g.intersect(pg.GenomicCoordinate("*", s, en), e["chrom"])
+            if k.data.get("source") == "ENCODE-SCREEN"]
+    return sorted(hits, key=lambda c: -c["bp"])
+# regulatory rows: from the injected ENHANCERS list, strongest first
+for e in sorted(ENHANCERS, key=lambda e: -float(e["score_max"])):
+    print(json.dumps({"chrom": e["chrom"], "start": int(e["start"]), "end": int(e["end"]) - 1,
+                      "type": "enhancer", "class": e["class"], "score": float(e["score_max"]),
+                      "n": int(e["n_rep"]), "cohort": e["cohort"], "target": e["target_gene"],
+                      "ccre_overlap": ccre_overlap(e),
+                      "name": f'enh:{e["class"]}->{e["target_gene"]}'}))
 ```
 
-The reverse — "which enhancers regulate MYC?" — is one hop the other way: find the gene
-node, then `g.get_neighbors_if(gene, lambda m: m and m["rel"] == "regulated_by")`.
+"Which enhancers regulate MYC in K562?" is just `COHORT: K562`, `TARGETS: [{"gene": "MYC"}]`, and a
+loop over `ENHANCERS`. "What enhancers overlap the variant?" uses `TARGETS: [{"region": ...}]`.
 
 ## The GENCODE Grove model
 
@@ -300,38 +378,93 @@ encoded as **labelled edges** — you traverse it, you don't re-parse it.
 **Node payloads** (`key.data`):
 
 ```python
-# every feature:
-{"type": "gene" | "transcript" | "exon", "id": <GFF ID>, "name": <gene_name>, "biotype": <gene_type>}
+# a gene or a transcript ("name" is the GENE name on both — isoform names are not stored):
+{"type": "gene" | "transcript", "id": <GFF ID>, "name": <gene_name>,
+ "biotype": <gene_type on a gene, transcript_type on a transcript>}
 # a transcript also carries its coding span (0-based closed; None = non-coding):
 {..., "cds_start": int | None, "cds_end": int | None}
-# an exon also carries its coding sub-range (None = the exon is entirely UTR):
-{..., "cds": [start, end] | None}
+# an exon carries ONLY these two — no id, no biotype, no cds:
+{"type": "exon", "name": <gene_name>}
 ```
+
+**`biotype` is the feature's own.** A transcript's is `transcript_type`, so an NMD isoform of a
+protein-coding gene reads `"nonsense_mediated_decay"` — filter transcripts on it directly. For
+the *gene's* biotype, read the **gene** node (walk `contains` up, or filter `type=="gene"` in the
+same `intersect`); never infer it from a transcript. Exons carry **no** `biotype` at all — they
+have none of their own; go one edge up to the transcript.
+
+**One exon key per physical exon.** A GFF repeats an exon line for every isoform that uses it;
+the grove stores it **once** (per gene). So an exon key is shared by several transcripts, and:
+
+* it has **no `id`** — identify an exon by its coordinates (`key.value.start` / `.end`);
+* **counting exon hits counts exons, not isoforms** — `len(exon_hits)` is how many distinct
+  exons overlap, never how many transcripts. For isoform counts, count `type=="transcript"`;
+* its **coding range is not on the node** — the same exon is coding in one isoform and UTR in
+  another, so derive it per transcript (see below).
+
+**cCRE nodes.** The grove also holds the ENCODE Registry of cCREs (V4) — an epigenomic overlap
+layer, **not** part of the gene hierarchy (no edges). A variant/locus `intersect` returns them
+alongside genes; filter on **`source`**, not `type`:
+
+```python
+{"type": "regulatory_region", "source": "ENCODE-SCREEN",
+ "class": "PLS"|"pELS"|"dELS"|"CA"|"CA-CTCF"|"CA-H3K4me3"|"TF"|"CA-TF",
+ "id": "EH38E…", "rdhs": "EH38D…"}
+```
+
+`type` is the Sequence Ontology term (SO:0005836) and is deliberately generic — these are
+*candidate* elements, so never report a cCRE as a confirmed promoter or enhancer. `class` is
+ENCODE's evidence-based classification (`pELS`/`dELS` = enhancer-**like** signature, `PLS` =
+promoter-like, `CA*` = chromatin-accessible). So "is chr7:55,191,822 in a cCRE, and which
+class?" is `intersect` + filter `source=="ENCODE-SCREEN"`; emit each hit as a record carrying
+its `class`, `type` and `source`.
 
 **Edges** — every edge carries a `{"rel": ...}` payload; when a grove mixes edge
 kinds, filter with `get_neighbors_if(node, lambda m: m and m["rel"] == "...")`:
 
 ```python
-{"rel": "contains"}    # fully-enumerable children: gene -> each transcript
-{"rel": "first_exon"}  # transcript -> its 5' exon ONLY (the splice-path entry, not every exon)
-{"rel": "next"}        # exon -> next exon, 5'->3' strand-aware: the splice chain
+{"rel": "contains"}                  # fully-enumerable children: gene -> each transcript
+{"rel": "first_exon", "tx": <ENST>}  # transcript -> its 5' exon ONLY (the splice-path entry)
+{"rel": "next",       "tx": <ENST>}  # exon -> next exon, 5'->3' strand-aware: the splice chain
 ```
 
-Enumerate an isoform's exons by following `first_exon` then walking `next`:
+**Always filter the chain edges on `tx`.** Exon keys are shared between isoforms, so one exon
+has an outgoing `next` **per isoform running through it**. Taking `[0]` blindly jumps onto
+another isoform's chain and silently returns a structure that doesn't exist. `tx` is the
+transcript's `id`:
 
 ```python
-gene = next(k for k in g.intersect(q, "chr7") if k.data["type"] == "gene")
-for tx in g.get_neighbors(gene):                  # contains: gene -> transcripts
-    exon = g.get_neighbors(tx)[0]                 # first_exon: transcript -> 5' exon
+def exons_of(g, tx):                              # an isoform's exons, 5'->3'
+    tid = tx.data["id"]
+    hit = g.get_neighbors_if(tx, lambda m: m and m["rel"] == "first_exon" and m["tx"] == tid)
+    exon, out = (hit[0] if hit else None), []
     while exon is not None:
-        coding = exon.data["cds"]                 # [start, end] coding part, or None if all-UTR
-        nxt = g.get_neighbors_if(exon, lambda m: m and m["rel"] == "next")
+        out.append(exon)
+        nxt = g.get_neighbors_if(exon, lambda m: m and m["rel"] == "next" and m["tx"] == tid)
         exon = nxt[0] if nxt else None
+    return out
+
+gene = next(k for k in g.intersect(q, "chr7") if k.data["type"] == "gene")
+for tx in g.get_neighbors_if(gene, lambda m: m and m["rel"] == "contains"):
+    lo, hi = tx.data["cds_start"], tx.data["cds_end"]
+    for n, exon in enumerate(exons_of(g, tx), 1):         # n IS the exon number
+        coding = None if lo is None or exon.value.start > hi or exon.value.end < lo \
+            else [max(exon.value.start, lo), min(exon.value.end, hi)]   # this exon's CDS part
 ```
 
-**There are no CDS or UTR nodes.** A coding region is an exon's `cds`; a UTR is the
-exon interval minus `cds` (5' vs 3' by strand); an intron is the gap between two
-exons on the `next` chain. Derive these — don't look for separate features.
+**There are no CDS or UTR nodes, and no `cds` field.** A coding region is the exon interval
+clipped to its transcript's `cds_start`/`cds_end` (as above) — it belongs to the *pair*, since a
+shared exon is coding in one isoform and UTR in another. A UTR is the exon minus that clip (5'
+vs 3' by strand); an intron is the gap between two exons on the `next` chain. Derive these —
+don't look for separate features or fields.
+
+**Exon number is the position on that chain** (1-based, already 5'->3' on both strands), and the
+chain's length is the isoform's exon count — so report "exon 7 of 11", and last-exon status, from
+the walk. There is no `exon_number` field, and the number is **per isoform**: the same exon is
+"exon 2 of 3" in one transcript and "exon 3 of 4" in another, so always name the transcript you
+counted in. Walk *down* from the transcript: edges are one-directional, so an exon key alone
+can't reach its parent — but an `intersect` that returns an exon returns its transcript too (the
+transcript's span covers it), so start there.
 
 ## Available resources
 

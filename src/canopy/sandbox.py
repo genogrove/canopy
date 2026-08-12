@@ -100,7 +100,10 @@ ALLOWED_IMPORTS = frozenset(("pygenogrove",) + _COMPUTE_MODULES)
 #: Default caps.
 DEFAULT_TIMEOUT_S = 30.0
 DEFAULT_OUTPUT_CAP = 256 * 1024  # bytes, per stream
-_DEFAULT_MEMORY_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB address space
+# 4 GiB address space. A mutable `Grove.deserialize` of the shipped grove peaks at ~2.0 GB, so the
+# old 2 GiB cap was exactly on the line — fine on macOS (RLIMIT_AS is unsettable there, so the cap
+# silently never applied) and a coin-flip OOM on Linux, where it does.
+_DEFAULT_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
 _MAX_OPEN_FDS = 64
 
 

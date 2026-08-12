@@ -33,6 +33,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   layer; an OS-level backend (seccomp/namespaces) is the documented next step for
   adversarial robustness. Covered by 22 isolation tests
   ([#3](https://github.com/genogrove/ask/pull/3)).
+- **Baked cCRE grove, per-question enhancers, and `canopy serve`**: the shipped grove is now
+  cohort-independent — GENCODE structure plus the ENCODE cCRE registry baked in as
+  `regulatory_region` (SO:0005836) nodes, so one `intersect` returns genes and cCREs from a
+  single handle. The rE2G enhancer→gene layer moved out of the grove: the model declares
+  `COHORT`/`TARGETS` alongside its program, the host grounds the cohort against the ENCODE
+  catalog (never silently substituting an unmatched tissue), fetches only the needed links via
+  tabix, and injects them as `ENHANCERS`. Adds `canopy serve`, a local web front-end over the
+  same generate → execute → render pipeline on a stdlib `http.server`, streaming ndjson
+  progress events so the download/build stages are visible. Enhancer records carry
+  `ccre_overlap` as a list with per-cCRE shared base counts, because most rE2G windows span
+  several cCREs and about a third span differing classes
+  ([#5](https://github.com/genogrove/canopy/pull/5)).
 
 ### Changed
 - **Upgraded `pygenogrove` to v0.4.0** (the universal JSON Grove redesign): re-pinned to the

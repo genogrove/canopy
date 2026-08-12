@@ -18,21 +18,32 @@ reconstructed as **directed edges** with three relations:
 
 * ``{"rel": "contains"}`` — fully-enumerable structural children, e.g. gene ->
   each transcript. ``get_neighbors`` gives them all.
-* ``{"rel": "first_exon"}`` — transcript -> its 5' exon, the splice-path entry
-  (NOT generic containment: it reaches one exon, not all of them).
-* ``{"rel": "next"}`` — a transcript's exons chained 5'->3' (strand-aware) from
-  that first exon; junctions and introns (the gaps) derive from this chain.
+* ``{"rel": "first_exon", "tx": <transcript id>}`` — transcript -> its 5' exon, the
+  splice-path entry (NOT generic containment: it reaches one exon, not all of them).
+* ``{"rel": "next", "tx": <transcript id>}`` — a transcript's exons chained 5'->3'
+  (strand-aware) from that first exon; junctions and introns (the gaps) derive from it.
 
-**Coding structure is folded into exons, not stored as separate nodes.** CDS is a
-single contiguous span per transcript (start -> stop codon), sliced across exons;
-5'/3' UTR are the exonic parts outside it. So each exon payload carries
-``cds = [start, end] | None`` (its coding sub-range; ``None`` = fully UTR), the
-transcript carries ``cds_start`` / ``cds_end``, and UTRs are *derived* (exon minus
-``cds``, 5'/3' by strand) — never stored. CDS / UTR / codon GFF features become
-this annotation; they are never inserted as keys.
+**One exon key per physical exon, per gene.** A GFF emits an exon line for every
+transcript that uses it, so a gene's isoforms repeat the same interval over and over
+(~5x across GENCODE, and 71 records at a busy locus collapse to 18). Those are the same
+exon, so they collapse to one key — but exons of two *overlapping genes* that happen to
+share an interval are not, hence the per-gene key. This is why the chain edges carry
+``tx``: a shared exon has one outgoing ``next`` **per isoform through it**, and a walk
+that ignores ``tx`` silently hops onto another isoform's chain.
 
-So enumerate an isoform's exons by ``first_exon`` then walking ``next``; the
-labels keep containment, splice-order, and later regulatory edges distinguishable.
+It also means an exon payload is only ``{"type", "name"}`` — no ``id`` (GENCODE gives one
+interval several ``exon_id``s within a gene, so no single value would be honest; identify
+an exon by its coordinates) and no ``biotype``.
+
+**Coding structure is derived, not stored.** CDS is a single contiguous span per
+transcript (start -> stop codon), so the transcript carries ``cds_start`` / ``cds_end``
+and an exon's coding sub-range is that span clipped to the exon — ``exon_cds(exon, tx)``.
+It belongs to the *(exon, transcript) pair*, not the exon: a shared exon is coding in one
+isoform and UTR in another. UTRs are likewise derived (exon minus the clip, 5'/3' by
+strand). CDS / UTR / codon GFF features become this annotation; never keys.
+
+So enumerate an isoform's exons by ``first_exon`` then walking ``next``, filtering both on
+``tx``; the labels keep containment, splice-order, and later regulatory edges distinguishable.
 """
 
 from __future__ import annotations
@@ -48,6 +59,37 @@ _DROP_TYPES = frozenset({
     "Selenocysteine",
 })
 
+# The gene hierarchy this loader models explicitly. Anything else in a *unified* GFF is a
+# foreign layer with its own column-9 vocabulary (ENCODE-SCREEN `regulatory_region` carries
+# `class`/`rdhs`) — those attributes are the whole point of the layer, so they're kept verbatim
+# alongside the source. Only for unmodelled types: doing it for gene/transcript/exon would drag
+# GENCODE's tag/level/havana_* through 13.5M keys to no purpose. See ``_foreign_payload``.
+_MODELLED_TYPES = frozenset({"gene", "transcript", "exon"})
+
+
+def _biotype(entry):
+    """A feature's **own** biotype: ``transcript_type`` for a transcript, ``gene_type`` otherwise.
+
+    GENCODE repeats ``gene_type`` on every transcript and exon line, so storing that as a
+    transcript's ``biotype`` both duplicates the parent's value and *loses* the transcript's own
+    — an NMD isoform of a protein-coding gene read back as ``protein_coding``. The gene's biotype
+    is never lost by preferring the transcript's: it's one ``contains`` edge up, on the gene node.
+    (``transcript_biotype`` is the Ensembl-GTF spelling of the same field.)
+    """
+    if entry.type != "transcript":
+        return entry.get_gene_biotype()
+    return (entry.get_attribute("transcript_type")
+            or entry.get_attribute("transcript_biotype")
+            or entry.get_gene_biotype())
+
+
+def _foreign_payload(entry):
+    """Payload for a feature outside ``_MODELLED_TYPES``: its GFF attributes verbatim, plus
+    ``source`` (column 2) so a query can tell one layer from another. ``ID`` is renamed to
+    ``id`` to match the modelled payload and ``canopy.layers``' baked nodes."""
+    attrs = dict(entry.attributes)
+    return {"source": entry.source, "id": attrs.pop("ID", None), **attrs}
+
 
 def load_gff(
     path: str | Path,
@@ -59,12 +101,18 @@ def load_gff(
 ):
     """Read ``path`` (plain/gzip/BGZF GFF or GTF) into a universal ``pg.Grove``.
 
-    Each feature becomes a key with a JSON payload
-    ``{"type", "id", "name", "biotype"}`` (``id`` = column-9 ``ID``, ``name`` =
-    ``gene_name``, ``biotype`` = ``gene_type``; ``None`` when absent). Transcripts
+    Each gene/transcript/exon becomes a key with a JSON payload ``{"type", "id", "name"}``
+    (``id`` = column-9 ``ID``, ``name`` = ``gene_name`` — always the *gene's*, on every
+    feature; ``None`` when absent). Genes and transcripts add ``biotype``, each its **own**
+    (``gene_type`` / ``transcript_type`` — see ``_biotype``); exons have none. Transcripts
     also carry ``cds_start`` / ``cds_end`` and exons carry ``cds`` (see the module
     docstring). The ``ID``/``Parent`` hierarchy becomes ``contains`` / ``first_exon``
     / ``next`` edges.
+
+    Any **other** feature type — a foreign layer in a unified GFF, e.g. ENCODE-SCREEN's
+    ``regulatory_region`` — instead keeps its column-9 attributes verbatim plus ``source``:
+    ``{"type": "regulatory_region", "source": "ENCODE-SCREEN", "id", "class", "rdhs"}``.
+    So a unified GENCODE+cCRE GFF round-trips without losing the cCRE classification.
 
     Loads only the slice you ask for — GENCODE has millions of features, so
     filter (``None`` = no filter on that axis; avoid all-None on full GENCODE):
@@ -100,7 +148,7 @@ def _parse(path, *, types, seqids, region, skip_invalid_lines):
             return False
         return True
 
-    feats = []  # (seqid, start, end, strand, type, id, name, biotype, parent_ids)
+    feats = []  # (seqid, start, end, strand, type, id, name, biotype, parent_ids, foreign)
     cds_span: dict[str, tuple[int, int]] = {}  # transcript id -> (min, max) 0-based closed
     for e in pg.GffReader(str(path), skip_invalid_lines=skip_invalid_lines):
         start, end = e.start - 1, e.end - 1  # GFF 1-based inclusive -> 0-based closed
@@ -120,8 +168,12 @@ def _parse(path, *, types, seqids, region, skip_invalid_lines):
         parent = e.get_attribute("Parent")
         feats.append((
             e.seqid, start, end, e.strand, e.type, e.get_attribute("ID"),
-            e.get_gene_name(), e.get_gene_biotype(),
+            e.get_gene_name(), _biotype(e),
             parent.split(",") if parent else [],
+            None if e.type in _MODELLED_TYPES else _foreign_payload(e),
+            # Exon dedup key (see _assemble). No `gene_id` (non-GENCODE GFF)? Fall back to the
+            # Parent transcript, so exons simply don't merge — never merge across genes.
+            (e.get_gene_id() or parent) if e.type == "exon" else None,
         ))
     return feats, cds_span
 
@@ -135,22 +187,34 @@ def _assemble(feats, cds_span):
     by_id: dict[str, object] = {}  # GFF3 ID -> Key, for resolving Parent references
     pending: list[tuple[str, object]] = []  # (parent_id, child_key) for non-exon children
     exons_by_parent: dict[str, list] = {}  # transcript id -> [(start, strand, Key)]
-    for seqid, start, end, strand, ftype, fid, name, biotype, parent_ids in feats:
-        payload = {"type": ftype, "id": fid, "name": name, "biotype": biotype}
+    exon_keys: dict[tuple, object] = {}  # (seqid, gene_id, start, end) -> Key
+    for seqid, start, end, strand, ftype, fid, name, biotype, parent_ids, foreign, gid in feats:
+        if ftype == "exon":
+            # ONE key per physical exon per gene. GFF emits an exon line per *transcript*, so a
+            # gene's isoforms repeat the same interval over and over (~5x across GENCODE) — the
+            # same exon biologically, and which isoforms use it is on the tx-tagged chain edges.
+            # Keyed by gene: ~2% of intervals are shared by two overlapping genes and those are
+            # NOT the same exon. No payload `id` — GENCODE gives one interval several `exon_id`s
+            # within a gene (~13% of the ambiguous ones), so no single value would be honest.
+            key = exon_keys.get((seqid, gid, start, end))
+            if key is None:
+                key = exon_keys[(seqid, gid, start, end)] = g.insert(
+                    seqid, pg.GenomicCoordinate(strand, start, end), {"type": ftype, "name": name})
+            for pid in parent_ids:
+                exons_by_parent.setdefault(pid, []).append((start, strand, key))
+            continue
+        if foreign is not None:
+            payload = {"type": ftype, **foreign}
+        else:  # gene / transcript — each carries its own biotype
+            payload = {"type": ftype, "id": fid, "name": name, "biotype": biotype}
         if ftype == "transcript":
             lo_hi = cds_span.get(fid)
             payload["cds_start"], payload["cds_end"] = lo_hi if lo_hi else (None, None)
-        elif ftype == "exon":
-            payload["cds"] = _exon_cds(start, end, cds_span, parent_ids)
         key = g.insert(seqid, pg.GenomicCoordinate(strand, start, end), payload)
         if fid is not None and fid not in by_id:
             by_id[fid] = key  # gene/transcript IDs are unique; first wins on shared-ID leaves
-        if ftype == "exon":
-            for pid in parent_ids:
-                exons_by_parent.setdefault(pid, []).append((start, strand, key))
-        else:
-            for pid in parent_ids:
-                pending.append((pid, key))
+        for pid in parent_ids:
+            pending.append((pid, key))
 
     # Resolve edges — GFF3 doesn't guarantee parent-before-child, but every key now exists.
     for pid, child_key in pending:
@@ -164,9 +228,11 @@ def _assemble(feats, cds_span):
         exons.sort(key=lambda se: se[0], reverse=(exons[0][1] == "-"))
         parent_key = by_id.get(pid)
         if parent_key is not None:
-            g.add_edge(parent_key, exons[0][2], {"rel": "first_exon"})
+            g.add_edge(parent_key, exons[0][2], {"rel": "first_exon", "tx": pid})
         for (_, _, a), (_, _, b) in zip(exons, exons[1:]):
-            g.add_edge(a, b, {"rel": "next"})
+            # `tx` is load-bearing, not decoration: exon keys are shared between isoforms, so an
+            # exon has an outgoing `next` per isoform through it. Walk one chain by filtering on it.
+            g.add_edge(a, b, {"rel": "next", "tx": pid})
     return g
 
 
@@ -218,28 +284,43 @@ def build_grove(gff_path, region=""):
         if e.type in drop:
             continue
         parent = e.get_attribute("Parent")
+        if e.type in ("gene", "transcript", "exon"):
+            foreign = None
+            bt = e.get_gene_biotype()
+            if e.type == "transcript":  # its OWN biotype, not its gene's — see _biotype
+                bt = (e.get_attribute("transcript_type")
+                      or e.get_attribute("transcript_biotype") or bt)
+        else:  # foreign layer: keep its column-9 vocabulary verbatim — see _foreign_payload
+            a = dict(e.attributes)
+            foreign, bt = {"source": e.source, "id": a.pop("ID", None), **a}, None
         feats.append((e.seqid, s, en, e.strand, e.type, e.get_attribute("ID"),
-                      e.get_gene_name(), e.get_gene_biotype(), parent.split(",") if parent else []))
+                      e.get_gene_name(), bt,
+                      parent.split(",") if parent else [], foreign,
+                      (e.get_gene_id() or parent) if e.type == "exon" else None))
 
     g = pg.Grove(order=100)
-    by_id, pending, exons_by_parent = {}, [], {}
-    for seqid, s, en, strand, ftype, fid, name, biotype, pids in feats:
-        pl = {"type": ftype, "id": fid, "name": name, "biotype": biotype}
+    by_id, pending, exons_by_parent, exon_keys = {}, [], {}, {}
+    for seqid, s, en, strand, ftype, fid, name, biotype, pids, foreign, gid in feats:
+        if ftype == "exon":  # one key per physical exon per gene — see _assemble
+            k = exon_keys.get((seqid, gid, s, en))
+            if k is None:
+                k = exon_keys[(seqid, gid, s, en)] = g.insert(
+                    seqid, pg.GenomicCoordinate(strand, s, en), {"type": ftype, "name": name})
+            for p in pids:
+                exons_by_parent.setdefault(p, []).append((s, strand, k))
+            continue
+        if foreign is not None:
+            pl = {"type": ftype, **foreign}
+        else:  # gene / transcript — each carries its own biotype
+            pl = {"type": ftype, "id": fid, "name": name, "biotype": biotype}
         if ftype == "transcript":
             sp = cds.get(fid)
             pl["cds_start"], pl["cds_end"] = sp if sp else (None, None)
-        elif ftype == "exon":
-            pl["cds"] = next(([max(s, cds[p][0]), min(en, cds[p][1])]
-                              for p in pids if p in cds and s <= cds[p][1] and en >= cds[p][0]), None)
         k = g.insert(seqid, pg.GenomicCoordinate(strand, s, en), pl)
         if fid and fid not in by_id:
             by_id[fid] = k
-        if ftype == "exon":
-            for p in pids:
-                exons_by_parent.setdefault(p, []).append((s, strand, k))
-        else:
-            for p in pids:
-                pending.append((p, k))
+        for p in pids:
+            pending.append((p, k))
     for p, ck in pending:
         pk = by_id.get(p)
         if pk is not None:
@@ -248,17 +329,21 @@ def build_grove(gff_path, region=""):
         ex.sort(key=lambda t: t[0], reverse=(ex[0][1] == "-"))
         pk = by_id.get(p)
         if pk is not None:
-            g.add_edge(pk, ex[0][2], {"rel": "first_exon"})
+            g.add_edge(pk, ex[0][2], {"rel": "first_exon", "tx": p})
         for (_, _, a), (_, _, b) in zip(ex, ex[1:]):
-            g.add_edge(a, b, {"rel": "next"})
+            g.add_edge(a, b, {"rel": "next", "tx": p})  # `tx` disambiguates shared exon keys
     return g
 
 
-def _exon_cds(start: int, end: int, cds_span: dict, parent_ids: list) -> list | None:
-    """The exon's coding sub-range = its intersection with the transcript's CDS
-    span (0-based closed), or ``None`` if the exon is entirely UTR / non-coding."""
-    for pid in parent_ids:
-        span = cds_span.get(pid)
-        if span and start <= span[1] and end >= span[0]:
-            return [max(start, span[0]), min(end, span[1])]
-    return None
+def exon_cds(exon, transcript) -> list | None:
+    """The exon's coding sub-range **in that transcript** (0-based closed), or ``None`` if it is
+    entirely UTR / non-coding: its interval clipped to the transcript's ``cds_start``/``cds_end``.
+
+    Derived, not stored. An exon key is shared by every isoform that uses it, and the same exon
+    is coding in one and UTR in another — so the coding range belongs to the (exon, transcript)
+    pair, not to the exon. The transcript already carries the CDS span, so this is one clip.
+    """
+    lo, hi = transcript.data["cds_start"], transcript.data["cds_end"]
+    if lo is None or exon.value.start > hi or exon.value.end < lo:
+        return None
+    return [max(exon.value.start, lo), min(exon.value.end, hi)]

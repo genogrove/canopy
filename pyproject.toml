@@ -32,7 +32,7 @@ dependencies = [
     "anthropic>=0.92",
     # Pinned for Level 2 reproducibility; the exact build (commit) is pinned in
     # [tool.uv.sources] below and mirrored in canopy.resources.
-    "pygenogrove==0.7.2",
+    "pygenogrove==0.7.4",
 ]
 
 [project.optional-dependencies]
@@ -55,9 +55,9 @@ Issues = "https://github.com/genogrove/canopy/issues"
 
 # pygenogrove is not yet published to PyPI; resolve it from its GitHub repo.
 # Pinning an immutable commit here is part of the Level 2 reproducibility commitment
-# (a tag can be moved; a commit SHA cannot). rev below is tag v0.7.2.
+# (a tag can be moved; a commit SHA cannot). rev below is tag v0.7.4.
 [tool.uv.sources]
-pygenogrove = { git = "https://github.com/genogrove/pygenogrove", rev = "2584321499cb23f814456236f1c3564a2efa956c" }
+pygenogrove = { git = "https://github.com/genogrove/pygenogrove", rev = "f803f01f4a1f8ff1a6482461144d576b599fc481" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/canopy"]
