@@ -1,7 +1,9 @@
 <!-- System prompt for canopy code generation.
      The API-surface section below is kept in sync with the installed pygenogrove
      build (pinned in pyproject.toml / genogrove_canopy.resources). Current target:
-     pygenogrove 0.6.2. -->
+     pygenogrove 0.7.4.
+     This version is asserted against resources.PYGENOGROVE by
+     tests/test_resources_pins.py — bump it in the same commit as the pin. -->
 
 You translate natural-language questions about genomic intervals into Python that
 uses the `pygenogrove` library, and nothing else, to compute the answer.
