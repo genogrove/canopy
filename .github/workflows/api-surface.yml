@@ -1,0 +1,68 @@
+name: API surface
+
+# The default CI job runs `uv run --no-project`, which never installs pygenogrove — so every
+# bindings-dependent test skips there and nothing verifies the codegen contract against the build
+# it is pinned to. This job does a real `uv sync` (compiling the C++ core) so those tests bind.
+#
+# Path-filtered rather than run on every PR: surface drift can only enter when the pin moves or the
+# advertised contract changes, so guarding those transitions catches it without paying a compile on
+# unrelated PRs. The workflow lists itself, so changes to this file are exercised by their own PR.
+on:
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "uv.lock"
+      - "src/genogrove_canopy/resources.py"
+      - "src/genogrove_canopy/prompts/system.md"
+      - "src/genogrove_canopy/cli.py"
+      - "tests/test_api_surface.py"
+      - ".github/workflows/api-surface.yml"
+  push:
+    branches: [main]
+    paths:  # same filter — `paths` is per-trigger, so without this every merge pays the compile
+      - "pyproject.toml"
+      - "uv.lock"
+      - "src/genogrove_canopy/resources.py"
+      - "src/genogrove_canopy/prompts/system.md"
+      - "src/genogrove_canopy/cli.py"
+      - "tests/test_api_surface.py"
+      - ".github/workflows/api-surface.yml"
+  workflow_dispatch:  # so it can be run by hand against any branch
+
+jobs:
+  surface:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      # Two different htslib needs, and they come from different packages:
+      #   libhts-dev — headers + `htslib.pc`, required to *build* pygenogrove. Its CMake does
+      #                `pkg_check_modules(... htslib)`, which fails on the binaries alone.
+      #   tabix      — the `bgzip`/`tabix` executables. Several tests `skipif` without them, so
+      #                omitting this would install the bindings and then skip the tests that
+      #                need indexed input.
+      - name: Install htslib (build headers + bgzip/tabix binaries)
+        run: sudo apt-get update && sudo apt-get install -y libhts-dev tabix
+
+      # pygenogrove is resolved from the pinned git commit and builds a C++ extension, so this
+      # needs a toolchain and takes minutes — unlike the skeleton job's seconds.
+      - name: Build the pinned pygenogrove and install the project
+        run: uv sync --frozen --extra dev  # `dev` carries pytest; the default sync omits it
+
+      - name: Verify the installed build matches the pin
+        run: |
+          uv run python -c "
+          from genogrove_canopy.resources import verify_pygenogrove_build, PYGENOGROVE
+          engine = verify_pygenogrove_build()  # raises on drift from the pin
+          print(f'pygenogrove {PYGENOGROVE.version} (engine {engine}) matches the pin')
+          "
+
+      # The point of the job: these skip in the default runner and are binding only here.
+      - name: Codegen contract vs the real API surface
+        run: uv run pytest tests/test_api_surface.py -q
+
+      - name: Full suite against the real bindings
+        run: uv run pytest -q
