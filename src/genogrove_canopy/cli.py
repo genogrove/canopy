@@ -30,6 +30,15 @@ _BASE = "gencode.human"
 # When a question needs enhancers but names no tissue, load this cohort and say so.
 DEFAULT_COHORT = "EFO:0005726"  # LNCaP clone FGC (prostate cancer) — the flagship cohort
 
+#: The read-only ``GroveView`` methods advertised to the model, in the order the prompt lists them.
+#:
+#: A single object rather than prose so the contract cannot drift from the pinned build:
+#: ``tests/test_api_surface.py`` asserts every name here exists on ``pg.GroveView``. Advertising a
+#: method the build lacks is the failure that matters — generated code raises ``AttributeError``
+#: inside the sandbox and the user sees a broken answer, not a build error. It has happened in both
+#: directions: 457feaa removed ``get_edge_list`` as absent, and it is present on 0.7.4.
+QUERY_SURFACE = ("intersect", "flanking", "get_neighbors", "get_edges", "get_neighbors_if")
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Construct the argument parser for the ``canopy`` command."""
@@ -132,8 +141,8 @@ def _grove_context():
         f"({resources.RESOURCES[_BASE].description}) — gene/transcript/exon structure **plus the "
         f"ENCODE cCRE nodes, in the same grove**. Open it lazily with `g = pg.GroveView.open({var})`. A "
         f"**located** query (a variant at chr7:55191822) reads just that locus; a **genome-wide / "
-        f"gene-name** query works from the same handle. Query-only: `intersect`, `flanking`, "
-        f"`get_neighbors`, `get_edges`, `get_neighbors_if`.\n"
+        f"gene-name** query works from the same handle. Query-only: "
+        f"{', '.join(f'`{m}`' for m in QUERY_SURFACE)}.\n"
         f"  Node layers in the grove — returned by `intersect` alongside genes, filter on `type`:\n"
         f"  {layers.catalogue_block(['ccre'])}\n"
         f"- `ENHANCERS` (list): the ENCODE-rE2G enhancer→gene links for the `COHORT`/`TARGETS` you "
