@@ -22,8 +22,9 @@ from genogrove_canopy import __version__, llm, resources, sandbox
 # we do not downgrade by default.
 DEFAULT_MODEL = "claude-opus-4-8"
 
-# The base annotation grove. The regulatory (enhancer→gene) layer is augmented onto it
-# per cohort, on demand — see the rE2G helpers in ``genogrove_canopy.resources``.
+# The shipped grove: GENCODE structure + the ENCODE cCRE layer, in one pinned artifact.
+# The enhancer→gene layer is *not* in it — it is cohort-specific and resolved per question
+# (see ``layers.enhancers`` and ``_answer``).
 _BASE = "gencode.human"
 
 # When a question needs enhancers but names no tissue, load this cohort and say so.
@@ -57,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--init",
         action="store_true",
-        help="Download the dataset grove(s) now (the pinned ~90 MB .gg) and exit, so the "
+        help="Download the shipped grove now (the pinned ~109 MB .gg) and exit, so the "
              "first real query is instant.",
     )
     parser.add_argument(
@@ -114,8 +115,9 @@ def _list_cohorts() -> None:
 def _grove_context():
     """Resolve the shipped grove to ``(resources_block, code_preamble, data_paths)``.
 
-    The grove is the GENCODE backbone with the **Tier-1 static layers baked in** as nodes
-    (currently the ENCODE cCRE registry) — see ``resources.ensure_baked_grove``. So a `intersect`
+    The grove is the GENCODE backbone with the **Tier-1 static layers already in it** — currently
+    the ENCODE cCRE registry, built into the pinned artifact rather than baked on first run (see
+    ``resources.ensure_all_grove``). So a `intersect`
     returns genes *and* cCREs from one handle, ``GENCODE_HUMAN``, opened lazily. The enhancer layer
     is **not** in the grove (it is dynamic/cohort-specific): the host resolves the model's declared
     ``COHORT``/``TARGETS`` through the tabix index and injects only the needed enhancers as the
@@ -124,15 +126,15 @@ def _grove_context():
     from genogrove_canopy import layers
 
     var = "GENCODE_HUMAN"
-    gg = str(resources.ensure_baked_grove(_BASE))
+    gg = str(resources.ensure_all_grove(_BASE))
     block = (
         f"- `{var}` (str): path to the shipped grove "
-        f"({resources.RESOURCES[_BASE].description}) — gene/transcript/exon structure **plus "
-        f"baked-in ENCODE cCRE nodes**. Open it lazily with `g = pg.GroveView.open({var})`. A "
+        f"({resources.RESOURCES[_BASE].description}) — gene/transcript/exon structure **plus the "
+        f"ENCODE cCRE nodes, in the same grove**. Open it lazily with `g = pg.GroveView.open({var})`. A "
         f"**located** query (a variant at chr7:55191822) reads just that locus; a **genome-wide / "
         f"gene-name** query works from the same handle. Query-only: `intersect`, `flanking`, "
         f"`get_neighbors`, `get_edges`, `get_neighbors_if`.\n"
-        f"  Baked node layers — returned by `intersect` alongside genes, filter on `type`:\n"
+        f"  Node layers in the grove — returned by `intersect` alongside genes, filter on `type`:\n"
         f"  {layers.catalogue_block(['ccre'])}\n"
         f"- `ENHANCERS` (list): the ENCODE-rE2G enhancer→gene links for the `COHORT`/`TARGETS` you "
         f"declare (see \"Enhancers\"). Empty `[]` unless the question is about enhancers/regulation."
@@ -239,10 +241,10 @@ def _resolve_query_cohorts(args, cohort_hint):
 
 
 def _prepare() -> None:
-    """First-run notice if the shipped grove isn't baked yet: download the pinned ~90 MB GENCODE
-    `.gg` and bake in the cCRE layer (a one-time ~1 min build)."""
-    if not resources._baked_grove_gg(_BASE).exists():
-        print(f"Preparing the {_BASE} grove (first run only: a pinned ~90 MB .gg + baking cCREs)…",
+    """First-run notice if the shipped grove isn't cached yet: a one-time ~109 MB download of the
+    pinned unified `.gg` (gene structure + cCREs). No local build."""
+    if not resources._all_grove_gg(_BASE).exists():
+        print(f"Fetching the {_BASE} grove (first run only: a pinned ~109 MB .gg)…",
               file=sys.stderr)
 
 
@@ -344,10 +346,10 @@ def main(argv: list[str] | None = None) -> int:
         _list_cohorts()
         return 0
 
-    if args.init:  # prime the shipped grove (GENCODE + baked cCREs) ahead of first use, then exit
+    if args.init:  # prime the shipped grove (GENCODE + cCREs) ahead of first use, then exit
         try:
             _prepare()
-            resources.ensure_baked_grove(_BASE)
+            resources.ensure_all_grove(_BASE)
         except Exception as exc:
             print(f"canopy: {exc}", file=sys.stderr)
             return 1
@@ -359,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        # The grove is cohort-independent (GENCODE + baked cCREs). Enhancers are resolved
+        # The grove is cohort-independent (GENCODE + cCREs). Enhancers are resolved
         # per question from the model's declared COHORT/TARGETS — see _answer.
         _prepare()
         resources_block, preamble, data_paths = _grove_context()

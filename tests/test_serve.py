@@ -93,7 +93,7 @@ def test_cohort_default_flag_is_not_display_text(monkeypatch):
     "default" sentinel as the user-facing note (the CLI filters it; serve must too)."""
     monkeypatch.setattr(serve, "_resolve_cohorts", lambda specs: {"LNCaP clone FGC": ["ENCSR1"]})
     monkeypatch.setattr(serve, "_cohort_ids", lambda c: ["EFO:0005726"])
-    monkeypatch.setattr(serve.resources, "_baked_grove_gg",
+    monkeypatch.setattr(serve.resources, "_all_grove_gg",
                         lambda n: type("P", (), {"exists": lambda s: True})())
     monkeypatch.setattr(serve, "_grove", lambda m: type("G", (), {
         "system_prompt": "", "preamble": "", "model": m,

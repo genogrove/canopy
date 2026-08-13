@@ -268,8 +268,8 @@ pg.__genogrove_version__       # underlying C++ engine version
 
 ## Enhancers — the regulatory layer (declare what you need)
 
-Enhancers are **not** in the grove (unlike cCREs, which are baked in — see "The GENCODE Grove
-model"). They are dynamic and cohort-specific, so baking them makes no sense: they come from the
+Enhancers are **not** in the grove (unlike cCREs, which are — see "The GENCODE Grove
+model"). They are dynamic and cohort-specific, so putting them in it makes no sense: they come from the
 ENCODE-rE2G enhancer→gene predictions, and the host fetches *only the ones your question needs*
 and injects them as a Python list variable **`ENHANCERS`** (already defined; empty `[]` when the
 question isn't about enhancers or nothing matched). To make that happen, **declare two lines
