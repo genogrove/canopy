@@ -395,27 +395,6 @@ def _prune_superseded_groves(name: str) -> int:
     return removed
 
 
-def refresh_grove(name: str) -> Path:
-    """Discard ``name``'s cached grove and fetch it again, returning the new path.
-
-    Deliberately narrow: it removes only the grove cache, never the annotation or any layer input.
-    Those are separate downloads, and one of them (`encode.ccre.v4`) is the build input for the
-    grove itself — a "clear the cache" that took everything would turn a re-fetch into a rebuild.
-
-    Refuses when nothing is pinned to fetch back, so it cannot leave a resource worse off than it
-    found it.
-    """
-    res = RESOURCES[name]
-    if not res.grove_url:
-        raise RuntimeError(
-            f"{name}: no `grove_url` is pinned, so a discarded grove could not be re-fetched — "
-            "refusing to delete it. (Nothing to refresh: this resource builds its grove locally.)"
-        )
-    shutil.rmtree(_all_grove_gg(name).parent, ignore_errors=True)
-    shutil.rmtree(_grove_dir(name), ignore_errors=True)  # the structure-only shard index
-    return ensure_all_grove(name)
-
-
 def grove_view(name: str):
     """Open the whole-genome grove as a lazy ``GroveView`` (downloads the pinned `.gg`
     on first use, else builds it). Serves both located and genome-wide queries — pages in

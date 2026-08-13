@@ -71,12 +71,6 @@ def build_parser() -> argparse.ArgumentParser:
              "first real query is instant.",
     )
     parser.add_argument(
-        "--refresh",
-        action="store_true",
-        help="With --init: discard the cached grove and fetch it again. Only the grove — the "
-             "annotation and layer inputs are separate downloads and are left alone.",
-    )
-    parser.add_argument(
         "-i", "--interactive",
         action="store_true",
         help="Interactive session: keep the grove(s) open across questions (the ~200 ms "
@@ -376,13 +370,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.init:  # prime the shipped grove (GENCODE + cCREs) ahead of first use, then exit
         try:
-            if args.refresh:
-                print(f"Refetching the {_BASE} grove (discarding the cached copy)…",
-                      file=sys.stderr)
-                resources.refresh_grove(_BASE)
-            else:
-                _prepare()
-                resources.ensure_all_grove(_BASE)
+            _prepare()
+            resources.ensure_all_grove(_BASE)
         except Exception as exc:
             print(f"canopy: {exc}", file=sys.stderr)
             return 1

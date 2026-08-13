@@ -211,27 +211,6 @@ def test_prune_removes_only_superseded_grove_dirs(monkeypatch, tmp_path) -> None
     assert left == sorted([f"{sha}.{cur}", f"{sha}.{cur}.shards", "0" * 64 + f".{cur}"])
 
 
-def test_refresh_refuses_when_nothing_is_pinned_to_refetch(monkeypatch, tmp_path) -> None:
-    """`refresh_grove` must not delete a grove it cannot fetch back."""
-    import dataclasses
-
-    monkeypatch.setattr(resources, "_CACHE", tmp_path)
-    res = resources.RESOURCES["gencode.human"]
-    monkeypatch.setitem(resources.RESOURCES, "gencode.human",
-                        dataclasses.replace(res, grove_url="", grove_sha256=""))
-    gg = resources._all_grove_gg("gencode.human")
-    gg.parent.mkdir(parents=True)
-    gg.write_bytes(b"pretend grove")
-
-    try:
-        resources.refresh_grove("gencode.human")
-    except RuntimeError as exc:
-        assert "re-fetched" in str(exc) or "refresh" in str(exc)
-    else:
-        raise AssertionError("refresh_grove deleted a grove it could not restore")
-    assert gg.exists(), "refused, but the grove was deleted anyway"
-
-
 def test_cache_location_is_overridable(monkeypatch) -> None:
     """`GENOGROVE_CANOPY_CACHE` redirects the cache, so a cold run needs no deletion.
 
