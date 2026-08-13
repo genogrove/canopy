@@ -30,10 +30,14 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      # Several tests `skipif` on bgzip/tabix, so without htslib they would still not run here —
-      # the job would install the bindings and then skip the tests that need indexed input.
-      - name: Install htslib (bgzip/tabix)
-        run: sudo apt-get update && sudo apt-get install -y tabix
+      # Two different htslib needs, and they come from different packages:
+      #   libhts-dev — headers + `htslib.pc`, required to *build* pygenogrove. Its CMake does
+      #                `pkg_check_modules(... htslib)`, which fails on the binaries alone.
+      #   tabix      — the `bgzip`/`tabix` executables. Several tests `skipif` without them, so
+      #                omitting this would install the bindings and then skip the tests that
+      #                need indexed input.
+      - name: Install htslib (build headers + bgzip/tabix binaries)
+        run: sudo apt-get update && sudo apt-get install -y libhts-dev tabix
 
       # pygenogrove is resolved from the pinned git commit and builds a C++ extension, so this
       # needs a toolchain and takes minutes — unlike the skeleton job's seconds.
