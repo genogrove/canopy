@@ -7,6 +7,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Progress and timestamped messages**: a 109 MB first-run download used to print one line and
+  then look hung. It now reports a percentage — redrawn in place on a terminal, one line per decile
+  when piped, so a CI log stays readable — and every CLI message carries a
+  `[CANOPY - YYYY-MM-DD HH:MM:SS]` stamp and an elapsed time. All of it on stderr, so
+  `canopy … > out.tsv` is unaffected ([#18](https://github.com/genogrove/canopy/pull/18)).
 - **Cache handling**: `GENOGROVE_CANOPY_CACHE` redirects the cache, so a cold run can be exercised
   against a throwaway directory instead of deleting the real one — which is what made the cold-fetch
   path untestable in CI. And a successful fetch now prunes grove directories left behind by an older

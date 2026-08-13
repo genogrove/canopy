@@ -226,13 +226,16 @@ def resolve(name: str) -> Path:
     return _download(res.url, res.sha256, _CACHE / res.sha256 / fname)
 
 
-def _download(url: str, sha256: str, dest: Path) -> Path:
+def _download(url: str, sha256: str, dest: Path, label: str = "") -> Path:
     """Stream ``url`` to ``dest`` (cache hit = no-op), verifying its sha256.
 
     A mismatch is a hard failure: the partial download is discarded, nothing is
     committed. The commit is an atomic rename within ``dest``'s directory. An empty
     ``sha256`` skips verification — for resolve-on-demand files (ENCODE-rE2G) that are
     not pinned until a run freezes them; curated ``RESOURCES`` always pass a checksum.
+
+    ``label`` turns on a progress counter; without one the download is silent, which is what
+    library callers and tests want.
     """
     if dest.exists():
         return dest
@@ -242,9 +245,19 @@ def _download(url: str, sha256: str, dest: Path) -> Path:
     tmp_path = Path(tmp.name)
     try:
         with tmp, urllib.request.urlopen(url) as resp:  # noqa: S310 — pinned catalog URL
+            progress = None
+            if label:
+                from genogrove_canopy.log import Progress
+
+                total = resp.headers.get("Content-Length")
+                progress = Progress(label, int(total) if total and total.isdigit() else None)
             for chunk in iter(lambda: resp.read(1 << 20), b""):
                 digest.update(chunk)
                 tmp.write(chunk)
+                if progress:
+                    progress.advance(len(chunk))
+            if progress:
+                progress.finish()
         if sha256 and digest.hexdigest() != sha256:
             raise ValueError(
                 f"checksum mismatch for {url!r}: expected {sha256}, got {digest.hexdigest()}"
@@ -349,7 +362,7 @@ def ensure_all_grove(name: str) -> Path:
     res = RESOURCES[name]
     gg.parent.mkdir(parents=True, exist_ok=True)
     if res.grove_url:  # download the pinned .gg (fast, reproducible)
-        out = _download(res.grove_url, res.grove_sha256, gg)
+        out = _download(res.grove_url, res.grove_sha256, gg, label=f"{name} grove")
         _prune_superseded_groves(name)  # only after a verified fetch — see the docstring
         return out
     if res.grove_layers:
