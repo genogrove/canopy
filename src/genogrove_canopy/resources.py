@@ -256,11 +256,16 @@ def _download(url: str, sha256: str, dest: Path, label: str = "") -> Path:
 
                 total = resp.headers.get("Content-Length")
                 progress = Progress(label, int(total) if total and total.isdigit() else None)
-            for chunk in iter(lambda: resp.read(1 << 20), b""):
-                digest.update(chunk)
-                tmp.write(chunk)
+            try:
+                for chunk in iter(lambda: resp.read(1 << 20), b""):
+                    digest.update(chunk)
+                    tmp.write(chunk)
+                    if progress:
+                        progress.advance(len(chunk))
+            except BaseException:
                 if progress:
-                    progress.advance(len(chunk))
+                    progress.abort()  # else the error prints onto the half-drawn progress line
+                raise
             if progress:
                 progress.finish()
         if sha256 and digest.hexdigest() != sha256:

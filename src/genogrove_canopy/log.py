@@ -42,7 +42,7 @@ def _fmt_size(n: float) -> str:
         if abs(n) < 1024 or unit == "GB":
             return f"{n:.0f}{unit}" if unit in ("B", "KB") else f"{n:.1f}{unit}"
         n /= 1024
-    return f"{n:.1f}GB"
+    raise AssertionError("unreachable: the GB branch always returns")
 
 
 class Progress:
@@ -83,11 +83,23 @@ class Progress:
         pct = min(100, self.done * 100 // self.total)
         return f"{pct:3d}%  {_fmt_size(self.done)} / {_fmt_size(self.total)}"
 
+    def _clear(self) -> None:
+        """End the in-place line. \033[K erases to end of line — without it a shorter following
+        line leaves the tail of the longer progress line behind."""
+        if self._tty:
+            print("\r\033[K", end="", file=sys.stderr, flush=True)
+
     def finish(self) -> None:
         elapsed = time.perf_counter() - self.start
         rate = self.done / elapsed if elapsed else 0
-        if self._tty:
-            # \033[K erases to end of line: without it a shorter final line would leave the
-            # tail of the longer progress line behind.
-            print("\r\033[K", end="", file=sys.stderr)
+        self._clear()
         took(f"{self.label} done — {_fmt_size(self.done)} at {_fmt_size(rate)}/s", elapsed)
+
+    def abort(self) -> None:
+        """Close out an interrupted transfer.
+
+        The in-place line ends without a newline by design, so whatever prints next lands *on* it.
+        Without this, a dropped connection writes its error across the half-drawn progress bar —
+        mangling the message exactly when the user most needs to read it.
+        """
+        self._clear()
