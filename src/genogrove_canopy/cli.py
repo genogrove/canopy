@@ -136,20 +136,33 @@ def _grove_context():
 
     var = "GENCODE_HUMAN"
     gg = str(resources.ensure_all_grove(_BASE))
-    block = (
+    block = resources_block(
+        var, resources.RESOURCES[_BASE].description, layers.catalogue_block(["ccre"])
+    )
+    preamble = f"{var} = {json.dumps(gg)}\nENHANCERS = []\n"
+    return block, preamble, [gg]
+
+
+def resources_block(var: str, description: str, layers_block: str) -> str:
+    """Render the "Available resources" text the model reads, for grove handle ``var``.
+
+    Pure so it can be tested without a grove: ``_grove_context`` resolves the ~109 MB artifact,
+    which a unit test has no business downloading. That matters here because this is the only place
+    ``QUERY_SURFACE`` reaches the model — a test asserting those names appear in the *rendered*
+    block is checking the real contract, not that a token exists somewhere in a source file.
+    """
+    return (
         f"- `{var}` (str): path to the shipped grove "
-        f"({resources.RESOURCES[_BASE].description}) — gene/transcript/exon structure **plus the "
+        f"({description}) — gene/transcript/exon structure **plus the "
         f"ENCODE cCRE nodes, in the same grove**. Open it lazily with `g = pg.GroveView.open({var})`. A "
         f"**located** query (a variant at chr7:55191822) reads just that locus; a **genome-wide / "
         f"gene-name** query works from the same handle. Query-only: "
         f"{', '.join(f'`{m}`' for m in QUERY_SURFACE)}.\n"
         f"  Node layers in the grove — returned by `intersect` alongside genes, filter on `type`:\n"
-        f"  {layers.catalogue_block(['ccre'])}\n"
+        f"  {layers_block}\n"
         f"- `ENHANCERS` (list): the ENCODE-rE2G enhancer→gene links for the `COHORT`/`TARGETS` you "
         f"declare (see \"Enhancers\"). Empty `[]` unless the question is about enhancers/regulation."
     )
-    preamble = f"{var} = {json.dumps(gg)}\nENHANCERS = []\n"
-    return block, preamble, [gg]
 
 
 def _parse_output(text: str):

@@ -19,6 +19,14 @@ on:
       - ".github/workflows/api-surface.yml"
   push:
     branches: [main]
+    paths:  # same filter — `paths` is per-trigger, so without this every merge pays the compile
+      - "pyproject.toml"
+      - "uv.lock"
+      - "src/genogrove_canopy/resources.py"
+      - "src/genogrove_canopy/prompts/system.md"
+      - "src/genogrove_canopy/cli.py"
+      - "tests/test_api_surface.py"
+      - ".github/workflows/api-surface.yml"
   workflow_dispatch:  # so it can be run by hand against any branch
 
 jobs:

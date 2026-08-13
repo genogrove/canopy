@@ -7,6 +7,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **API-surface guard, and CI that can actually run it**: the prompt's advertised `GroveView`
+  query surface is now a single constant the resources block renders from, and a test asserts every
+  name in it exists on the pinned `pygenogrove`. Advertising a method the build lacks made generated
+  code raise `AttributeError` in the sandbox, which no checksum or version-string check could catch —
+  and it had already happened in both directions. Adds a path-filtered `api-surface` workflow that
+  does a real `uv sync` (compiling the C++ core) so bindings-dependent tests bind instead of
+  skipping: 78 passing there against 57 in the default job, and the build pin is verified against
+  real bindings in CI for the first time
+  ([#10](https://github.com/genogrove/canopy/issues/10), [#13](https://github.com/genogrove/canopy/pull/13)).
 - Initial project skeleton: `uv` + hatchling packaging, GPL-3.0-or-later license,
   module layout (`cli`, `llm`, `sandbox`, `registry`, `prompts/system.md`), CLI
   smoke tests, and a CI workflow stub.
