@@ -104,23 +104,16 @@ def test_pinned_grove_artifact_is_immutable() -> None:
 
 
 def test_no_resource_url_is_a_placeholder() -> None:
-    """No *runtime-resolved* resource may ship an unreachable placeholder URL.
+    """**Every** catalog URL must be reachable — no placeholders anywhere.
 
-    `encode.ccre.v4` is exempt and asserted to stay exempt: it is a build-time input whose bytes
-    were never uploaded, and nothing in the query path resolves it (the cCREs ship inside the
-    grove). Every other entry is fetched on a user's machine, so a placeholder there is a broken
-    install — which is exactly what shipped before #9, when baking resolved that entry at runtime.
+    Until the cCRE pair was uploaded, `encode.ccre.v4` carried `pending-upload.invalid` URLs and
+    those 32 MB existed only in one developer's cache: a fresh install could not bake the grove
+    (#9), and even after the layer moved into the grove, rebuilding it depended on that machine.
+    The exemption this guard used to carry is gone, so any new placeholder fails here.
     """
-    build_time_only = {"encode.ccre.v4"}
     for name, res in resources.RESOURCES.items():
         urls = [u for u in (res.url, res.index_url, res.grove_url) if u]
         placeholders = [u for u in urls if ".invalid" in u or "pending-upload" in u]
-        if name in build_time_only:
-            assert placeholders, (
-                f"{name} is listed as build-time-only but now has real URLs — if it is fetched at "
-                "runtime, drop it from `build_time_only` so this guard covers it"
-            )
-            continue
         assert not placeholders, (
             f"{name}: placeholder URL(s) {placeholders} would fail on any machine without a "
             "pre-seeded cache"

@@ -74,6 +74,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#6](https://github.com/genogrove/canopy/pull/6)).
 
 ### Fixed
+- **The ENCODE cCRE pair is pinned instead of existing only in one cache**: both files carried
+  `pending-upload.invalid` URLs, so the 32 MB they name lived nowhere but one developer's machine —
+  a fresh install could not bake the grove (#9), and even after the layer moved into the shipped
+  grove, *rebuilding* that grove depended on that one cache. Uploaded to `genogrove/canopy` and
+  pinned at an immutable commit; both verified against the sha256s already in the catalog. The
+  placeholder guard's exemption for this resource is gone, so no catalog entry can carry an
+  unreachable URL again ([#12](https://github.com/genogrove/canopy/issues/12)).
 - **One unified grove, pinned from Hugging Face**: the shipped artifact is now the GENCODE
   backbone with the 2,348,854 ENCODE cCREs already built into it, pinned at an immutable
   `genogrove/canopy` commit. This fixes a cold install that was broken for everyone but the

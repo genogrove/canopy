@@ -167,20 +167,27 @@ RESOURCES: dict[str, Resource] = {
         name="encode.ccre.v4",
         # ENCODE Registry of cCREs V4 (GRCh38). Nature 2026, doi:10.1038/s41586-025-09909-9.
         #
-        # **Build-time input only — never resolved on a user's machine.** The cCREs ship inside the
+        # **Build-time input — not resolved on a user's machine.** The cCREs ship inside the
         # unified grove above, so the query path reads them from there; nothing in `src/` resolves
         # this entry (`layers.ccres.all_records`/`in_region` are host-side helpers with no
-        # production caller). It stays in the catalog to document the layer's provenance and sha256
-        # for anyone rebuilding the unified GFF.
+        # production caller). It is pinned anyway so *rebuilding* the unified grove is reproducible
+        # rather than depending on one machine's cache — which is what it did until now, when both
+        # URLs were `pending-upload.invalid` placeholders and these 32 MB existed nowhere else.
         #
-        # The `.invalid` host is deliberate: these bytes were never uploaded, and a loud DNS failure
-        # beats a silent bad download if something starts resolving this again. Uploading the pair
-        # to `genogrove/canopy` would make the *rebuild* reproducible too — the sha256s below are
-        # final, so upload from the content-addressed cache rather than regenerating.
-        url="https://pending-upload.invalid/GRCh38-cCREs.v4.bed.gz",
+        # Uploaded from the content-addressed cache, so the bytes are the ones the sha256s below
+        # already pinned; both were re-fetched through `_download` and verified.
+        url=(
+            "https://huggingface.co/datasets/genogrove/canopy/resolve/"
+            "23fa3a6420cba225c7ba8821d11530a404937655"
+            "/ccres/GRCh38-cCREs.v4.bed.gz"
+        ),
         sha256="9f33d157de568afffedc0b3bebd0b5aaa350e341cb18d5009d2fee6f4a8cee0d",
         filename="GRCh38-cCREs.v4.bed.gz",
-        index_url="https://pending-upload.invalid/GRCh38-cCREs.v4.bed.gz.tbi",
+        index_url=(
+            "https://huggingface.co/datasets/genogrove/canopy/resolve/"
+            "23fa3a6420cba225c7ba8821d11530a404937655"
+            "/ccres/GRCh38-cCREs.v4.bed.gz.tbi"
+        ),
         index_sha256="485e642dd8f0fb97ff693157a54ef47e881cb31ee8dcfca54bea73bfb64721cd",
         description="ENCODE Registry of cCREs V4, GRCh38 (2,348,854 elements; Nature 2026, "
                     "doi:10.1038/s41586-025-09909-9).",
