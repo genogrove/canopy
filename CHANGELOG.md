@@ -74,6 +74,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#6](https://github.com/genogrove/canopy/pull/6)).
 
 ### Fixed
+- **The pin guard was blind to two of the three URL fields**: it checked only `grove_url`, and
+  skipped any resource without a grove entirely — so when #14 gave the cCRE pair real Hugging Face
+  URLs, nothing asserted they were commit-pinned rather than `resolve/main`. It now walks `url`,
+  `index_url` and `grove_url` with their matching checksums
+  ([#14](https://github.com/genogrove/canopy/pull/14), [#15](https://github.com/genogrove/canopy/pull/15)).
 - **The ENCODE cCRE pair is pinned instead of existing only in one cache**: both files carried
   `pending-upload.invalid` URLs, so the 32 MB they name lived nowhere but one developer's machine —
   a fresh install could not bake the grove (#9), and even after the layer moved into the shipped

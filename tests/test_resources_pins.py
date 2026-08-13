@@ -72,35 +72,43 @@ def test_system_prompt_target_matches_registry() -> None:
     )
 
 
-def test_pinned_grove_artifact_is_immutable() -> None:
-    """Every pinned grove artifact must be a checksummed, immutable reference.
+def test_every_pinned_artifact_is_immutable() -> None:
+    """**Every** pinned artifact — annotation, index, grove — must be checksummed and immutable.
 
-    The build pin has had a drift guard since #2; the *data* pins never did, which is how a
-    grove artifact built under an older payload model stayed pinned across three releases
-    (#9). A movable ref is the failure mode that matters: `resolve/main` on Hugging Face or a
-    `/tree/` URL keeps resolving after the file behind it changes, so the sha256 check starts
-    failing on a fetch that used to work — or worse, the sha is updated to match and the pin
-    silently now means something else.
+    The build pin has had a drift guard since #2; the *data* pins never did, which is how a grove
+    built under an older payload model stayed pinned across three releases (#9). A movable ref is
+    the failure mode that matters: `resolve/main` on Hugging Face or a `/tree/` URL keeps resolving
+    after the bytes behind it change, so the checksum starts failing on a fetch that used to work —
+    or worse, someone updates the sha to match and the pin silently means something else.
+
+    This covered only `grove_url` until #14 gave `encode.ccre.v4` real Hugging Face URLs, which the
+    guard then did not look at: it skipped every resource without a grove. Now it walks all three
+    (url, index_url, grove_url) with their matching checksums.
     """
     movable = ("/resolve/main/", "/resolve/master/", "/tree/", "/blob/main/", "/raw/main/")
     for name, res in resources.RESOURCES.items():
-        if not res.grove_url:
-            continue
-        assert re.fullmatch(r"[0-9a-f]{64}", res.grove_sha256), (
-            f"{name}: grove_sha256 must be a full 64-hex sha256 (got {res.grove_sha256!r})"
-        )
-        for ref in movable:
-            assert ref not in res.grove_url, (
-                f"{name}: grove_url pins the movable ref {ref!r} — use an immutable commit sha "
-                f"so the pinned bytes cannot change underneath the checksum ({res.grove_url})"
+        for field, url, digest in (
+            ("url", res.url, res.sha256),
+            ("index_url", res.index_url, res.index_sha256),
+            ("grove_url", res.grove_url, res.grove_sha256),
+        ):
+            if not url:
+                continue
+            assert re.fullmatch(r"[0-9a-f]{64}", digest), (
+                f"{name}.{field}: needs a full 64-hex sha256, got {digest!r}"
             )
-        # A Hugging Face `resolve/<ref>/…` must name a 40-hex commit, not a branch or tag.
-        m = re.search(r"huggingface\.co/datasets/[^/]+/[^/]+/resolve/(?P<ref>[^/]+)/", res.grove_url)
-        if m:
-            assert re.fullmatch(r"[0-9a-f]{40}", m.group("ref")), (
-                f"{name}: grove_url resolves ref {m.group('ref')!r}, which is not an immutable "
-                "commit sha"
-            )
+            for ref in movable:
+                assert ref not in url, (
+                    f"{name}.{field} pins the movable ref {ref!r} — use an immutable commit sha so "
+                    f"the pinned bytes cannot change underneath the checksum ({url})"
+                )
+            # A Hugging Face `resolve/<ref>/…` must name a 40-hex commit, not a branch or tag.
+            m = re.search(r"huggingface\.co/datasets/[^/]+/[^/]+/resolve/(?P<ref>[^/]+)/", url)
+            if m:
+                assert re.fullmatch(r"[0-9a-f]{40}", m.group("ref")), (
+                    f"{name}.{field} resolves ref {m.group('ref')!r}, which is not an immutable "
+                    "commit sha"
+                )
 
 
 def test_no_resource_url_is_a_placeholder() -> None:
