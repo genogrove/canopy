@@ -75,7 +75,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `_BAKED_SCHEMA`), along with the deserialize-then-insert workaround for pygenogrove#68.
   `_GROVE_SCHEMA` 2 → 3 so cached copies of the old artifact are re-fetched rather than
   silently reused. The pin guard now also covers the data pins: full-length checksums, no
-  movable refs, and no placeholder URLs on anything resolved at runtime
+  movable refs, and no placeholder URLs on anything resolved at runtime. A `Resource` now also
+  declares the layers its pinned grove carries, so the paths that build a grove locally refuse
+  rather than returning an annotation-only one whose layer queries would come back empty instead
+  of failing
   ([#9](https://github.com/genogrove/canopy/issues/9), [#11](https://github.com/genogrove/canopy/pull/11)).
 - **`prompts/system.md` declared the wrong pinned build**: the header said "Current target:
   pygenogrove 0.6.2" while the pin was 0.7.4. Because `system.md` *is* the system prompt, that
