@@ -61,6 +61,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#5](https://github.com/genogrove/canopy/pull/5)).
 
 ### Changed
+- **README rewritten for users**: it still announced the question→answer loop as unimplemented,
+  checked for `pygenogrove` 0.6.2 against a 0.7.4 pin, and tracked a roadmap of long-finished work,
+  while omitting the cCRE and enhancer layers, `canopy serve`, and most flags. Now covers what the
+  grove contains, the flags that exist, what Level 2 reproducibility means in practice, and
+  configuration — including `GENOGROVE_CANOPY_CACHE`, which was undocumented
+  ([#17](https://github.com/genogrove/canopy/pull/17)).
 - **Upgraded `pygenogrove` to v0.4.0** (the universal JSON Grove redesign): re-pinned to the
   immutable commit `d6c75b9` (tag `v0.4.0`) across `pyproject.toml` + `registry.PYGENOGROVE`,
   and rewrote the `prompts/system.md` codegen contract for the new surface — `GenomicCoordinate`
