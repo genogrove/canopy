@@ -187,3 +187,41 @@ def test_shard_index_is_not_the_pinned_grove_directory() -> None:
         assert pinned_dir not in shard_dir.parents, (
             f"{name}: shard index nests inside the pinned grove's directory ({shard_dir})"
         )
+
+
+def test_prune_removes_only_superseded_grove_dirs(monkeypatch, tmp_path) -> None:
+    """Pruning deletes stale-schema dirs for this resource and touches nothing else.
+
+    Every `_GROVE_SCHEMA` bump used to leak a whole grove: one real install carried 988 MB across
+    `.1` and `.2` before anyone looked, which means the bump before that had already leaked one.
+    """
+    monkeypatch.setattr(resources, "_CACHE", tmp_path)
+    sha = resources.RESOURCES["gencode.human"].sha256
+    cur = resources._GROVE_SCHEMA
+    root = tmp_path / "groves"
+    names = [f"{sha}.{cur}", f"{sha}.{cur}.shards",          # current — keep
+             f"{sha}.1", f"{sha}.2", f"{sha}.1.shards",      # superseded — remove
+             "0" * 64 + f".{cur}"]                            # another resource — never touch
+    for n in names:
+        (root / n).mkdir(parents=True)
+
+    removed = resources._prune_superseded_groves("gencode.human")
+    left = sorted(p.name for p in root.iterdir())
+    assert removed == 3
+    assert left == sorted([f"{sha}.{cur}", f"{sha}.{cur}.shards", "0" * 64 + f".{cur}"])
+
+
+def test_cache_location_is_overridable(monkeypatch) -> None:
+    """`GENOGROVE_CANOPY_CACHE` redirects the cache, so a cold run needs no deletion.
+
+    Read at import, so this reloads the module rather than setting the variable and hoping.
+    """
+    import importlib
+
+    monkeypatch.setenv("GENOGROVE_CANOPY_CACHE", "/tmp/canopy-cache-probe")
+    reloaded = importlib.reload(resources)
+    try:
+        assert str(reloaded._CACHE) == "/tmp/canopy-cache-probe"
+    finally:
+        monkeypatch.delenv("GENOGROVE_CANOPY_CACHE")
+        importlib.reload(resources)

@@ -17,6 +17,7 @@ takes a curated *name*, never a URL — so the only data ever fetched is what
 from __future__ import annotations
 
 import hashlib
+import os
 import shlex
 import shutil
 import subprocess
@@ -197,7 +198,18 @@ RESOURCES: dict[str, Resource] = {
 
 # Content-addressed cache: <CACHE>/<sha256>/<filename>. A file only lands here
 # after its checksum is verified, so a cache hit needs no re-verification.
-_CACHE = Path.home() / ".cache" / "genogrove-canopy"
+#
+# `GENOGROVE_CANOPY_CACHE` overrides the location, so a cold run can be exercised against a
+# throwaway directory instead of deleting the real cache:
+#
+#     GENOGROVE_CANOPY_CACHE=$(mktemp -d) canopy --init
+#
+# That is what makes the cold-fetch path testable in CI, which has no cache to clear and must not
+# clear a shared one. Read once at import; tests that need to redirect it mid-process monkeypatch
+# `resources._CACHE` directly.
+_CACHE = Path(
+    os.environ.get("GENOGROVE_CANOPY_CACHE") or Path.home() / ".cache" / "genogrove-canopy"
+)
 
 
 def resolve(name: str) -> Path:
@@ -337,7 +349,9 @@ def ensure_all_grove(name: str) -> Path:
     res = RESOURCES[name]
     gg.parent.mkdir(parents=True, exist_ok=True)
     if res.grove_url:  # download the pinned .gg (fast, reproducible)
-        return _download(res.grove_url, res.grove_sha256, gg)
+        out = _download(res.grove_url, res.grove_sha256, gg)
+        _prune_superseded_groves(name)  # only after a verified fetch — see the docstring
+        return out
     if res.grove_layers:
         raise RuntimeError(
             f"{name}: no `grove_url` is pinned, and a local build cannot reproduce this grove's "
@@ -351,7 +365,34 @@ def ensure_all_grove(name: str) -> Path:
     tmp = gg.with_name(gg.name + ".tmp")
     build_grove(indexed_path(name), region="").serialize(str(tmp))
     tmp.replace(gg)
+    _prune_superseded_groves(name)
     return gg
+
+
+def _prune_superseded_groves(name: str) -> int:
+    """Delete cached grove directories for ``name`` under a *different* ``_GROVE_SCHEMA``.
+
+    Only ever called after a successful fetch or build, so what it removes is already superseded by
+    a verified artifact. Without this every schema bump leaks a full grove: one real install carried
+    988 MB across `.1` and `.2` before anyone noticed, meaning the bump *before* that had already
+    leaked one silently.
+
+    Matches on the resource's own sha256 prefix, so it cannot touch another resource's cache, and
+    keeps both current directories (the grove and its `.shards` sibling). Returns how many it
+    removed.
+    """
+    root = _CACHE / "groves"
+    if not root.is_dir():
+        return 0
+    sha = RESOURCES[name].sha256
+    keep = {f"{sha}.{_GROVE_SCHEMA}", f"{sha}.{_GROVE_SCHEMA}.shards"}
+    removed = 0
+    for d in root.glob(f"{sha}.*"):
+        if d.name in keep or not d.is_dir():
+            continue
+        shutil.rmtree(d, ignore_errors=True)
+        removed += 1
+    return removed
 
 
 def grove_view(name: str):

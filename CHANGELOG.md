@@ -7,6 +7,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Cache handling**: `GENOGROVE_CANOPY_CACHE` redirects the cache, so a cold run can be exercised
+  against a throwaway directory instead of deleting the real one — which is what made the cold-fetch
+  path untestable in CI. And a successful fetch now prunes grove directories left behind by an older
+  `_GROVE_SCHEMA`; every bump used to leak a whole grove, unnoticed until one install had 988 MB of
+  them ([#12](https://github.com/genogrove/canopy/issues/12), [#16](https://github.com/genogrove/canopy/pull/16)).
 - **API-surface guard, and CI that can actually run it**: the prompt's advertised `GroveView`
   query surface is now a single constant the resources block renders from, and a test asserts every
   name in it exists on the pinned `pygenogrove`. Advertising a method the build lacks made generated
