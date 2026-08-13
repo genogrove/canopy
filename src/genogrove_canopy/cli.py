@@ -266,7 +266,8 @@ def _prepare() -> None:
     """First-run notice if the shipped grove isn't cached yet: a one-time ~109 MB download of the
     pinned unified `.gg` (gene structure + cCREs). No local build."""
     if not resources._all_grove_gg(_BASE).exists():
-        log.say(f"Fetching the {_BASE} grove — first run only, a pinned ~109 MB .gg")
+        log.say(f"Fetching the grove ({resources.RESOURCES[_BASE].grove_contents}) — "
+                "first run only, a pinned ~109 MB .gg")
 
 
 def _cohort_ids(cohorts) -> list:

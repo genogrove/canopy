@@ -127,6 +127,10 @@ class Resource:
     # `ensure_all_grove` refuse to substitute a structurally different grove instead of silently
     # returning one whose extra layers are simply absent (queries would come back empty, not error).
     grove_layers: tuple[str, ...] = ()
+    # Short human label for progress messages — what is *in* the grove, not the catalog key.
+    # `gencode.human grove` reads as GENCODE-only and understates an artifact that also carries
+    # 2.35M cCREs; `grove_layers` above is the machine-checked list and is too long for one line.
+    grove_contents: str = ""
 
 
 # Curated dataset catalog. Each entry pins an *immutable* release (an explicit
@@ -162,6 +166,7 @@ RESOURCES: dict[str, Resource] = {
         ),
         grove_sha256="f1c53fe2d535eaaf698e159e4943e9195bbd36407a630b0ee4abf59c87c8e4e0",
         grove_layers=("ENCODE cCRE registry (V4, GRCh38)",),
+        grove_contents="GENCODE human v50 + ENCODE cCREs V4",
         description="GENCODE v50 comprehensive gene annotation, GRCh38 (GFF3, sorted + bgzip + tabix).",
     ),
     "encode.ccre.v4": Resource(
@@ -362,7 +367,10 @@ def ensure_all_grove(name: str) -> Path:
     res = RESOURCES[name]
     gg.parent.mkdir(parents=True, exist_ok=True)
     if res.grove_url:  # download the pinned .gg (fast, reproducible)
-        out = _download(res.grove_url, res.grove_sha256, gg, label=f"{name} grove")
+        # Short label: it repeats on every progress line, and a line wider than the terminal
+        # wraps — after which `\r` cannot overwrite it cleanly. The contents are named once in
+        # the header message instead (see `cli._prepare`).
+        out = _download(res.grove_url, res.grove_sha256, gg, label="grove")
         _prune_superseded_groves(name)  # only after a verified fetch — see the docstring
         return out
     if res.grove_layers:
