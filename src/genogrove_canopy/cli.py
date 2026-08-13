@@ -15,7 +15,7 @@ import sys
 import time
 from pathlib import Path
 
-from genogrove_canopy import __version__, llm, resources, sandbox
+from genogrove_canopy import __version__, llm, log, resources, sandbox
 
 # Default Anthropic model for code generation. Opus is the most capable tier and
 # the connected-interval reasoning here is the paper's headline contribution, so
@@ -266,8 +266,8 @@ def _prepare() -> None:
     """First-run notice if the shipped grove isn't cached yet: a one-time ~109 MB download of the
     pinned unified `.gg` (gene structure + cCREs). No local build."""
     if not resources._all_grove_gg(_BASE).exists():
-        print(f"Fetching the {_BASE} grove (first run only: a pinned ~109 MB .gg)…",
-              file=sys.stderr)
+        log.say(f"Fetching the grove ({resources.RESOURCES[_BASE].grove_contents}) — "
+                "first run only, a pinned ~109 MB .gg")
 
 
 def _cohort_ids(cohorts) -> list:
@@ -304,10 +304,10 @@ def _answer(question, *, system_prompt, preamble, args, execute):
         if records:
             enh_pre = enhancers.preamble(records)
             src = " (default — name a tissue or pass --cohort)" if note == "default" else ""
-            print(f"Enhancers: {len(records)} links from cohort(s) {'; '.join(cohorts)}{src}.",
-                  file=sys.stderr)
+            log.say(f"Enhancers: {len(records)} links from cohort(s) "
+                    f"{'; '.join(cohorts)}{src}")
         elif note and note != "default":
-            print(note, file=sys.stderr)
+            log.say(note)
     # JSONL is the output contract, so guarantee `json` is importable even if the
     # generated code forgets the import (it's already in the allowlist).
     t1 = time.perf_counter()
@@ -348,7 +348,7 @@ def _interactive(args, *, system_prompt, preamble, data_paths, site_dir) -> int:
             else:
                 sys.stdout.write(out)
                 sys.stdout.flush()
-            print(f"({gen_s + exec_s:.2f}s  llm {gen_s:.2f}s · grove {exec_s:.3f}s)", file=sys.stderr)
+            log.say(f"Answered in {gen_s + exec_s:.2f}s — llm {gen_s:.2f}s · grove {exec_s:.3f}s")
     finally:
         worker.close()
     return 0
@@ -370,12 +370,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.init:  # prime the shipped grove (GENCODE + cCREs) ahead of first use, then exit
         try:
+            t0 = time.perf_counter()
             _prepare()
             resources.ensure_all_grove(_BASE)
+            log.took("Ready", time.perf_counter() - t0)
         except Exception as exc:
             print(f"canopy: {exc}", file=sys.stderr)
             return 1
-        print("Ready.", file=sys.stderr)
         return 0
 
     if not args.question and not args.interactive:
