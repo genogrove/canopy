@@ -11,6 +11,7 @@ $ canopy "What enhancers regulate AR in prostate cancer?"
 ```
 
 ```
+# abridged: the real table also carries a `cohort` column, and full cCRE lists
 AR enhancers in prostate cancer (LNCaP): 22 link(s), 16 distal:
 chrom  start     end       name                type      class    score    n  target  ccre_overlap
 chrX   67544302  67545353  enh:promoter->AR    enhancer  promoter 0.99999  1  AR      [{'id': 'EH38E3936120', 'class': 'pELS', 'bp': 332}, …]
@@ -49,12 +50,13 @@ $ uv run canopy --init
 
 ## Use
 
-Set `ANTHROPIC_API_KEY`, then ask:
+Set `ANTHROPIC_API_KEY`, then ask. (`uv run` is only needed until you activate the
+environment — `source .venv/bin/activate`, after which `canopy` works on its own.)
 
 ```console
-$ canopy "Which gene contains the variant at chr7:55,191,822?"
-$ canopy --show-code "Which transcripts share an exon with chr7:55,191,822?"
-$ canopy --format json "List the exons of EGFR"
+$ uv run canopy "Which gene contains the variant at chr7:55,191,822?"
+$ uv run canopy --show-code "Which transcripts share an exon with chr7:55,191,822?"
+$ uv run canopy --format json "List the exons of EGFR"
 ```
 
 | Flag | |
@@ -68,7 +70,7 @@ $ canopy --format json "List the exons of EGFR"
 There is also a local web front end over the same pipeline:
 
 ```console
-$ canopy serve
+$ uv run canopy serve
 ```
 
 ## What you can ask about
