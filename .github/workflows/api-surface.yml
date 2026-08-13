@@ -42,7 +42,7 @@ jobs:
       # pygenogrove is resolved from the pinned git commit and builds a C++ extension, so this
       # needs a toolchain and takes minutes — unlike the skeleton job's seconds.
       - name: Build the pinned pygenogrove and install the project
-        run: uv sync --frozen
+        run: uv sync --frozen --extra dev  # `dev` carries pytest; the default sync omits it
 
       - name: Verify the installed build matches the pin
         run: |
