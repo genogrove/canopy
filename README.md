@@ -15,7 +15,7 @@ AR enhancers in prostate cancer (LNCaP): 22 link(s), 16 distal:
 strand=.  type=enhancer  n=1  cohort=EFO:0005726  target=AR
 chrom  start     end       name                class       score    ccre_overlap
 chrX   67544302  67545353  enh:promoter->AR    promoter    0.99999  pELS:332 PLS:277 PLS:162
-chrX   67545965  67547497  enh:genic->AR       genic       0.99888  pELS:329 pELS:318 dELS:214
+chrX   67545965  67547497  enh:genic->AR       genic       0.99888  pELS:329 pELS:318 pELS:219 dELS:214 dELS:159
 chrX   67551264  67551763  enh:genic->AR       genic       0.6421   -
 chrX   67538334  67538833  enh:intergenic->AR  intergenic  0.47963  TF:168
 …
