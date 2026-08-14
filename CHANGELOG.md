@@ -116,7 +116,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in a shipped manifest and fetched a cohort at a time (~6.5 MB) from an immutable
   `genogrove/canopy` commit. The pinned files are the derived bgzip+tabix indexes, so enhancer
   queries no longer need htslib or a local sort/index step
-  ([#20](https://github.com/genogrove/canopy/issues/20), [#24](https://github.com/genogrove/canopy/pull/24)).
+  ([#20](https://github.com/genogrove/canopy/issues/20), [#23](https://github.com/genogrove/canopy/pull/23)).
 - **The pin guard was blind to two of the three URL fields**: it checked only `grove_url`, and
   skipped any resource without a grove entirely — so when #14 gave the cCRE pair real Hugging Face
   URLs, nothing asserted they were commit-pinned rather than `resolve/main`. It now walks `url`,
