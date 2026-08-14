@@ -216,6 +216,12 @@ def _record_columns(records: list[dict]) -> list[str]:
 #: know a column vanished because it was constant.
 _MIN_ROWS_TO_COLLAPSE = 2
 
+#: Never hoisted, however constant. Every other collapsible column is metadata *about the query*
+#: (`cohort`, `target`, `type`, `n`, `strand`); `chrom` is part of each row's identity. Hoisting it
+#: makes a row stop being self-describing — coordinates copied out of the table without their
+#: chromosome are wrong, not merely incomplete. Worth the ~7 characters.
+_NEVER_COLLAPSED = frozenset({"chrom"})
+
 
 def _constant_columns(records: list[dict], cols: list[str]) -> dict:
     """Columns whose value is identical in every record, as ``{column: value}``.
@@ -228,6 +234,8 @@ def _constant_columns(records: list[dict], cols: list[str]) -> dict:
         return {}
     shared = {}
     for c in cols:
+        if c in _NEVER_COLLAPSED:
+            continue
         values = {_cell(r.get(c, "")) for r in records}
         if len(values) == 1 and all(c in r for r in records):
             value = values.pop()

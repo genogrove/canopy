@@ -30,6 +30,19 @@ _ROWS = [
 _STDOUT = "\n".join(json.dumps(r) for r in _ROWS)
 
 
+def test_chrom_is_never_hoisted_even_when_constant() -> None:
+    """A row must stay self-describing.
+
+    Every other collapsible column is metadata about the query; `chrom` is part of each row's
+    identity, and coordinates copied out of the table without their chromosome are wrong rather
+    than incomplete.
+    """
+    lines = _render(_STDOUT, "text").strip().splitlines()
+    assert "chrom=" not in lines[0], "chrom was hoisted out of the rows"
+    assert "chrom" in lines[1].split()
+    assert all(ln.startswith("chrX") for ln in lines[2:])
+
+
 def test_constant_columns_are_stated_once_not_repeated() -> None:
     """`cohort`, `target`, `type`, `strand` and `n` are identical on all three rows."""
     lines = _render(_STDOUT, "text").strip().splitlines()
@@ -37,8 +50,8 @@ def test_constant_columns_are_stated_once_not_repeated() -> None:
     for col in ("cohort=EFO:0005726", "target=AR", "type=enhancer", "n=1", "strand=."):
         assert col in shared
         assert col.split("=")[0] not in header.split(), f"{col} was collapsed but still a column"
-    # the columns that actually differ must survive
-    for col in ("start", "end", "class", "score", "ccre_overlap"):
+    # the columns that actually differ — plus chrom, which is exempt — must survive
+    for col in ("chrom", "start", "end", "class", "score", "ccre_overlap"):
         assert col in header.split()
 
 

@@ -69,7 +69,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Readable `text` output**: an enhancer answer repeated `type`, `strand`, `n`, `cohort` and
   `target` identically down every row while dumping raw dicts for `ccre_overlap`, pushing lines past
   200 characters so the columns that differed scrolled off. Constant columns are now stated once
-  above the table and nested cells abbreviate to `pELS:332 PLS:277` — ~103 characters for the same
+  above the table (except `chrom`, which keeps rows self-describing) and nested cells abbreviate to `pELS:332 PLS:277` — ~103 characters for the same
   answer. `tsv`/`json`/`bed` are untouched: a parser cannot know a column vanished because it
   happened to be constant ([#19](https://github.com/genogrove/canopy/pull/19)).
 - **README rewritten for users**: it still announced the question→answer loop as unimplemented,
