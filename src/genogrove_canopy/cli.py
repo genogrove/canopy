@@ -210,6 +210,60 @@ def _record_columns(records: list[dict]) -> list[str]:
     return cols
 
 
+
+#: Columns dropped from the text table when they carry no per-row information. Not applied to
+#: tsv/json/bed — a machine format must stay a stable rectangle, and a downstream parser cannot
+#: know a column vanished because it was constant.
+_MIN_ROWS_TO_COLLAPSE = 2
+
+#: Never hoisted, however constant. Every other collapsible column is metadata *about the query*
+#: (`cohort`, `target`, `type`, `n`, `strand`); `chrom` is part of each row's identity. Hoisting it
+#: makes a row stop being self-describing — coordinates copied out of the table without their
+#: chromosome are wrong, not merely incomplete. Worth the ~7 characters.
+_NEVER_COLLAPSED = frozenset({"chrom"})
+
+
+def _constant_columns(records: list[dict], cols: list[str]) -> dict:
+    """Columns whose value is identical in every record, as ``{column: value}``.
+
+    An enhancer answer repeats `type=enhancer`, `cohort=EFO:0005726`, `target=AR` and a `.` strand
+    down 22 rows — five columns of no information, pushing the ones that differ off the screen.
+    Stated once above the table instead.
+    """
+    if len(records) < _MIN_ROWS_TO_COLLAPSE:
+        return {}
+    shared = {}
+    for c in cols:
+        if c in _NEVER_COLLAPSED:
+            continue
+        values = {_cell(r.get(c, "")) for r in records}
+        if len(values) == 1 and all(c in r for r in records):
+            value = values.pop()
+            if value != "":
+                shared[c] = value
+    # Never collapse everything away: a table with no columns is not a table.
+    return shared if len(shared) < len(cols) else {}
+
+
+def _cell(value) -> str:
+    """Render one cell for the text table.
+
+    A list of dicts — `ccre_overlap` is the one in practice — becomes `pELS:332 PLS:277 PLS:162`
+    rather than 200 characters of `repr`. The full structure stays in `--format json`, which is
+    where a caller who wants the ids should be looking.
+    """
+    if isinstance(value, list) and value and all(isinstance(v, dict) for v in value):
+        parts = []
+        for item in value:
+            label = item.get("class") or item.get("type") or item.get("id") or "?"
+            size = item.get("bp")
+            parts.append(f"{label}:{size}" if size is not None else str(label))
+        return " ".join(parts)
+    if isinstance(value, list) and not value:
+        return "-"  # an empty list is a finding (no cCRE overlap), not a missing value
+    return str(value)
+
+
 def _format_records(records: list[dict], fmt: str) -> str:
     if fmt == "json":
         return "\n".join(json.dumps(r) for r in records)
@@ -219,11 +273,18 @@ def _format_records(records: list[dict], fmt: str) -> str:
             rows = ["\t".join(cols)]
             rows += ["\t".join(str(r.get(c, "")) for c in cols) for r in records]
             return "\n".join(rows)
-        # text: an aligned, human-readable table (every field visible), padded per column.
-        width = {c: max(len(c), max((len(str(r.get(c, ""))) for r in records), default=0)) for c in cols}
-        fmt_row = lambda vals: "  ".join(str(v).ljust(width[c]) for c, v in zip(cols, vals))
-        rows = [fmt_row(cols)]
-        rows += [fmt_row([r.get(c, "") for c in cols]) for r in records]
+        # text: an aligned table for a human to read. Two things keep it readable that the
+        # machine formats deliberately skip — see `_constant_columns` and `_cell`.
+        shared = _constant_columns(records, cols)
+        cols = [c for c in cols if c not in shared]
+        body = [{c: _cell(r.get(c, "")) for c in cols} for r in records]
+        width = {c: max(len(c), max((len(b[c]) for b in body), default=0)) for c in cols}
+        fmt_row = lambda vals: "  ".join(str(v).ljust(width[c]) for c, v in zip(cols, vals)).rstrip()
+        rows = []
+        if shared:  # stated once instead of repeated down every row
+            rows.append("  ".join(f"{k}={v}" for k, v in shared.items()))
+        rows.append(fmt_row(cols))
+        rows += [fmt_row([b[c] for c in cols]) for b in body]
         return "\n".join(rows)
     # BED: 0-based closed -> half-open (end + 1); host owns the conversion, once.
     rows = ["#chrom\tstart\tend\tname\tscore\tstrand"]
