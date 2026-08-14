@@ -11,13 +11,19 @@ $ canopy "What enhancers regulate AR in prostate cancer?"
 ```
 
 ```
-# abridged: the real table also carries a `cohort` column, and full cCRE lists
 AR enhancers in prostate cancer (LNCaP): 22 link(s), 16 distal:
-chrom  start     end       name                type      class    score    n  target  ccre_overlap
-chrX   67544302  67545353  enh:promoter->AR    enhancer  promoter 0.99999  1  AR      [{'id': 'EH38E3936120', 'class': 'pELS', 'bp': 332}, …]
-chrX   67551264  67551763  enh:genic->AR       enhancer  genic    0.6421   1  AR      []
+strand=.  type=enhancer  n=1  cohort=EFO:0005726  target=AR
+chrom  start     end       name                class       score    ccre_overlap
+chrX   67544302  67545353  enh:promoter->AR    promoter    0.99999  pELS:332 PLS:277 PLS:162
+chrX   67545965  67547497  enh:genic->AR       genic       0.99888  pELS:329 pELS:318 pELS:219 dELS:214 dELS:159
+chrX   67551264  67551763  enh:genic->AR       genic       0.6421   -
+chrX   67538334  67538833  enh:intergenic->AR  intergenic  0.47963  TF:168
 …
 ```
+
+Values identical on every row are stated once above the table. `-` means *no* overlapping
+cCRE — a real finding for about 2% of links, not missing data. `--format json` keeps the full
+structure, including the cCRE accessions.
 
 ## Why
 
