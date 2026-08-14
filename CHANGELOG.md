@@ -7,11 +7,6 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
-- **Per-stage progress for a question**: a query used to print nothing between the prompt and the
-  answer, so a slow LLM call, a slow rE2G lookup and a slow grove query were indistinguishable. Each
-  stage now logs with its own timing, and the enhancer line names what it looked up and in which
-  cohort — `Loading ENCODE-rE2G links for gene AR — cohort(s) LNCaP clone FGC`, then
-  `rE2G: 22 enhancer→gene link(s) (0.4s)` ([#21](https://github.com/genogrove/canopy/pull/21)).
 - **Progress and timestamped messages**: a 109 MB first-run download used to print one line and
   then look hung. It now reports a percentage — redrawn in place on a terminal, one line per decile
   when piped, so a CI log stays readable — and every CLI message carries a
@@ -71,6 +66,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#5](https://github.com/genogrove/canopy/pull/5)).
 
 ### Changed
+- **Per-stage progress for a question**: a query used to print nothing between the prompt and the
+  answer, so a slow LLM call, a slow rE2G lookup and a slow grove query were indistinguishable. Each
+  stage now logs with its own timing, and the enhancer line names what it looked up and in which
+  cohort — `Loading ENCODE-rE2G links for gene AR — cohort(s) LNCaP clone FGC`, then
+  `rE2G: 22 enhancer→gene link(s) (0.4s)` ([#21](https://github.com/genogrove/canopy/pull/21)).
 - **Readable `text` output**: an enhancer answer repeated `type`, `strand`, `n`, `cohort` and
   `target` identically down every row while dumping raw dicts for `ccre_overlap`, pushing lines past
   200 characters so the columns that differed scrolled off. Constant columns are now stated once
