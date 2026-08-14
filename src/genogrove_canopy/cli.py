@@ -339,6 +339,24 @@ def _cohort_ids(cohorts) -> list:
     return [name2id[n] for n in cohorts if n in name2id]
 
 
+
+def _describe_targets(targets) -> str:
+    """Name what the enhancer lookup is for, e.g. ``gene AR`` or ``2 regions``.
+
+    The model declares targets as ``{"gene": …}`` / ``{"region": …}``; a log line saying only
+    "loading enhancers" leaves the reader unable to tell a wrong-gene answer from a right one.
+    """
+    genes = [t["gene"] for t in targets if t.get("gene")]
+    regions = [t["region"] for t in targets if t.get("region")]
+    parts = []
+    if genes:
+        parts.append(f"gene{'s' if len(genes) > 1 else ''} {', '.join(genes)}")
+    if regions:
+        parts.append(f"{len(regions)} region{'s' if len(regions) > 1 else ''}"
+                     if len(regions) > 1 else f"region {regions[0]}")
+    return " and ".join(parts) or "the declared targets"
+
+
 def _answer(question, *, system_prompt, preamble, args, execute):
     """Translate one question to code, run it via ``execute(script)``, and render.
 
@@ -350,9 +368,11 @@ def _answer(question, *, system_prompt, preamble, args, execute):
     the host grounds the cohort (``--cohort`` overrides), fetches only those enhancers via the
     tabix index, and injects them as ``ENHANCERS`` — no whole-cohort grove augment.
     """
+    log.say(f"Generating a pygenogrove query ({args.model})")
     t0 = time.perf_counter()
     cohort_hint, targets, code = llm.generate_query(question, system_prompt, model=args.model)
     gen_s = time.perf_counter() - t0
+    log.took("Query generated", gen_s)
     if args.show_code:
         print("# --- generated code ---", file=sys.stderr)
         print(code, file=sys.stderr)
@@ -361,16 +381,22 @@ def _answer(question, *, system_prompt, preamble, args, execute):
         from genogrove_canopy.layers import enhancers
         cohorts, note = _resolve_query_cohorts(args, cohort_hint)
         cohort_ids = _cohort_ids(cohorts)
+        log.say(f"Loading ENCODE-rE2G links for {_describe_targets(targets)}"
+                + (f" — cohort(s) {'; '.join(cohorts)}" if cohorts else ""))
+        t_enh = time.perf_counter()
         records = enhancers.fetch_for_targets(targets, cohort_ids) if cohort_ids else []
         if records:
             enh_pre = enhancers.preamble(records)
             src = " (default — name a tissue or pass --cohort)" if note == "default" else ""
-            log.say(f"Enhancers: {len(records)} links from cohort(s) "
-                    f"{'; '.join(cohorts)}{src}")
+            log.took(f"rE2G: {len(records)} enhancer→gene link(s){src}",
+                     time.perf_counter() - t_enh)
         elif note and note != "default":
             log.say(note)
+        else:
+            log.say("rE2G: no links for those targets in this cohort")
     # JSONL is the output contract, so guarantee `json` is importable even if the
     # generated code forgets the import (it's already in the allowlist).
+    log.say("Running the query over the grove")
     t1 = time.perf_counter()
     result = execute("import json\n" + preamble + enh_pre + code)
     exec_s = time.perf_counter() - t1
