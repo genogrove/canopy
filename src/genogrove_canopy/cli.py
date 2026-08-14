@@ -361,8 +361,10 @@ def _answer(question, *, system_prompt, preamble, args, execute):
     """Translate one question to code, run it via ``execute(script)``, and render.
 
     ``execute`` is a ``script -> SandboxResult`` callable (``sandbox.run`` for one-shot,
-    ``Worker.submit`` for interactive). Returns ``(rendered_stdout, error_msg, gen_s, exec_s)``
-    — exactly one of stdout/error is non-empty; the two times split code-gen from execution.
+    ``Worker.submit`` for interactive). Returns ``(rendered_stdout, error_msg, gen_s, enh_s,
+    exec_s)`` — exactly one of stdout/error is non-empty. Three times, not two: the rE2G fetch
+    sits between code-gen and execution, and leaving it out made the reported total wrong by
+    however long it took.
 
     The enhancer layer is resolved **per question**: the model declares ``COHORT``/``TARGETS``,
     the host grounds the cohort (``--cohort`` overrides), fetches only those enhancers via the
@@ -376,24 +378,26 @@ def _answer(question, *, system_prompt, preamble, args, execute):
     if args.show_code:
         print("# --- generated code ---", file=sys.stderr)
         print(code, file=sys.stderr)
-    enh_pre = ""
+    enh_pre, enh_s = "", 0.0
     if targets:  # an enhancer/regulation question — resolve the cohort and fetch its enhancers
         from genogrove_canopy.layers import enhancers
         cohorts, note = _resolve_query_cohorts(args, cohort_hint)
         cohort_ids = _cohort_ids(cohorts)
-        log.say(f"Loading ENCODE-rE2G links for {_describe_targets(targets)}"
-                + (f" — cohort(s) {'; '.join(cohorts)}" if cohorts else ""))
-        t_enh = time.perf_counter()
-        records = enhancers.fetch_for_targets(targets, cohort_ids) if cohort_ids else []
+        records = []
+        if cohort_ids:  # announce only once there is somewhere to load from
+            log.say(f"Loading ENCODE-rE2G links for {_describe_targets(targets)} — "
+                    f"cohort(s) {'; '.join(cohorts)}")
+            t_enh = time.perf_counter()
+            records = enhancers.fetch_for_targets(targets, cohort_ids)
+            enh_s = time.perf_counter() - t_enh
         if records:
             enh_pre = enhancers.preamble(records)
             src = " (default — name a tissue or pass --cohort)" if note == "default" else ""
-            log.took(f"rE2G: {len(records)} enhancer→gene link(s){src}",
-                     time.perf_counter() - t_enh)
+            log.took(f"rE2G: {len(records)} enhancer→gene link(s){src}", enh_s)
         elif note and note != "default":
             log.say(note)
-        else:
-            log.say("rE2G: no links for those targets in this cohort")
+        elif cohort_ids:
+            log.took("rE2G: no links for those targets in this cohort", enh_s)
     # JSONL is the output contract, so guarantee `json` is importable even if the
     # generated code forgets the import (it's already in the allowlist).
     log.say("Running the query over the grove")
@@ -401,11 +405,11 @@ def _answer(question, *, system_prompt, preamble, args, execute):
     result = execute("import json\n" + preamble + enh_pre + code)
     exec_s = time.perf_counter() - t1
     if result.returncode != 0 or result.timed_out:
-        return "", (result.stderr.strip() or "(the generated code failed with no output)"), gen_s, exec_s
+        return "", (result.stderr.strip() or "(the generated code failed with no output)"), gen_s, enh_s, exec_s
     rendered = _render(result.stdout, args.format)
     if not rendered.strip():
-        return "", "(the generated code produced no output)", gen_s, exec_s
-    return rendered, "", gen_s, exec_s
+        return "", "(the generated code produced no output)", gen_s, enh_s, exec_s
+    return rendered, "", gen_s, enh_s, exec_s
 
 
 def _interactive(args, *, system_prompt, preamble, data_paths, site_dir) -> int:
@@ -425,7 +429,7 @@ def _interactive(args, *, system_prompt, preamble, data_paths, site_dir) -> int:
             if question in ("exit", "quit"):
                 break
             try:
-                out, err, gen_s, exec_s = _answer(question, system_prompt=system_prompt,
+                out, err, gen_s, enh_s, exec_s = _answer(question, system_prompt=system_prompt,
                                                   preamble=preamble, args=args, execute=worker.submit)
             except Exception as exc:  # e.g. an LLM error — keep the session alive
                 print(f"canopy: {exc}", file=sys.stderr)
@@ -435,7 +439,9 @@ def _interactive(args, *, system_prompt, preamble, data_paths, site_dir) -> int:
             else:
                 sys.stdout.write(out)
                 sys.stdout.flush()
-            log.say(f"Answered in {gen_s + exec_s:.2f}s — llm {gen_s:.2f}s · grove {exec_s:.3f}s")
+            log.say(f"Answered in {gen_s + enh_s + exec_s:.2f}s — llm {gen_s:.2f}s"
+                    + (f" · rE2G {enh_s:.2f}s" if enh_s else "")
+                    + f" · grove {exec_s:.3f}s")
     finally:
         worker.close()
     return 0
@@ -488,7 +494,7 @@ def main(argv: list[str] | None = None) -> int:
                             data_paths=data_paths, site_dir=site_dir)
 
     try:  # one-shot: a fresh sandbox per invocation
-        out, err, _gen_s, _exec_s = _answer(
+        out, err, _gen_s, _enh_s, _exec_s = _answer(
             args.question, system_prompt=system_prompt, preamble=preamble, args=args,
             execute=lambda s: sandbox.run(s, data_paths=data_paths, extra_syspath=[site_dir]),
         )
