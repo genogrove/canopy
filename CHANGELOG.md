@@ -11,8 +11,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no pinned checksum, so a rerun could silently receive different bytes. The sha256 of what was
   actually fetched is now recorded beside the cached index and readable via `re2g_provenance()`,
   and the fetch announces itself as unpinned instead of looking like every other verified
-  download. Pinning the cohorts outright remains open
-  ([#20](https://github.com/genogrove/canopy/issues/20), [#23](https://github.com/genogrove/canopy/pull/23)).
+  download ([#20](https://github.com/genogrove/canopy/issues/20), [#23](https://github.com/genogrove/canopy/pull/23)).
 - **Progress and timestamped messages**: a 109 MB first-run download used to print one line and
   then look hung. It now reports a percentage — redrawn in place on a terminal, one line per decile
   when piped, so a CI log stays readable — and every CLI message carries a
@@ -115,7 +114,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   1,476 index files (369 cohorts x byEnhancer/byTargetGene x .tsv.gz/.tbi) are now pinned by sha256
   in a shipped manifest and fetched a cohort at a time (~6.5 MB) from an immutable
   `genogrove/canopy` commit. The pinned files are the derived bgzip+tabix indexes, so enhancer
-  queries no longer need htslib or a local sort/index step
+  queries no longer need htslib or a local sort/index step. A cohort counts as cached
+  only when all four of its files are present — checking the two tables alone let a half-finished
+  fetch report itself ready and then fail inside tabix
   ([#20](https://github.com/genogrove/canopy/issues/20), [#23](https://github.com/genogrove/canopy/pull/23)).
 - **The pin guard was blind to two of the three URL fields**: it checked only `grove_url`, and
   skipped any resource without a grove entirely — so when #14 gave the cCRE pair real Hugging Face

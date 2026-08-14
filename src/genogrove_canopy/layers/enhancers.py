@@ -200,11 +200,22 @@ def preamble(records) -> str:
     return f"ENHANCERS = json.loads({json.dumps(json.dumps(records))})\n"
 
 
+def _index_files(cohort: str) -> list[str]:
+    """The four filenames a cohort needs: two bgzip tables and their tabix indexes.
+
+    Single source of truth for the set. When the presence check covered only the two `.tsv.gz`
+    files, a cohort whose `.tbi` files had not arrived reported itself ready and then failed
+    inside tabix.
+    """
+    slug = _slug(cohort)
+    return [f"{slug}.{kind}{suffix}"
+            for kind in ("byEnhancer.tsv.gz", "byTargetGene.tsv.gz")
+            for suffix in ("", ".tbi")]
+
+
 def index_present(cohort: str) -> bool:
-    """True if both index files are already cached for ``cohort`` — no fetching."""
-    s = _slug(cohort)
-    return (INDEX_DIR / f"{s}.byTargetGene.tsv.gz").exists() and \
-           (INDEX_DIR / f"{s}.byEnhancer.tsv.gz").exists()
+    """True if **every** file the cohort needs is already cached — no fetching."""
+    return all((INDEX_DIR / name).exists() for name in _index_files(cohort))
 
 
 def ensure_index(cohort: str) -> bool:
@@ -216,10 +227,7 @@ def ensure_index(cohort: str) -> bool:
     """
     if index_present(cohort):
         return True
-    slug = _slug(cohort)
-    names = [f"{slug}.{kind}{suffix}"
-             for kind in ("byEnhancer.tsv.gz", "byTargetGene.tsv.gz")
-             for suffix in ("", ".tbi")]
+    names = _index_files(cohort)
     manifest = resources.re2g_index_manifest()
     if any(n not in manifest for n in names):
         return False

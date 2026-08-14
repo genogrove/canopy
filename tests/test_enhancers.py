@@ -72,3 +72,26 @@ def test_fetch_for_targets_gene_and_region():
     # deduped across the two overlapping targets
     keys = {(r["chrom"], r["start"], r["end"], r["target_gene"], r["cohort"]) for r in recs}
     assert len(keys) == len(recs)
+
+
+def test_index_present_requires_every_file_not_just_the_tables(tmp_path, monkeypatch):
+    """A cohort with tables but no tabix indexes is *not* ready.
+
+    `index_present` used to check only the two `.tsv.gz` files, so an interrupted first fetch —
+    or a cache from the old locally-built layout — reported itself ready and then failed inside
+    tabix. `_index_files` is now the single definition of the set, used by the check and the
+    fetch alike.
+    """
+    monkeypatch.setattr(enhancers, "INDEX_DIR", tmp_path)
+    names = enhancers._index_files("EFO:0005726")
+    assert len(names) == 4, "a cohort needs two tables and their two indexes"
+
+    for name in names:
+        if name.endswith(".tbi"):
+            continue
+        (tmp_path / name).write_bytes(b"")
+    assert not enhancers.index_present("EFO:0005726"), "tables alone must not count as ready"
+
+    for name in names:
+        (tmp_path / name).write_bytes(b"")
+    assert enhancers.index_present("EFO:0005726")

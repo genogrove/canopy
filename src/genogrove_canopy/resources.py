@@ -632,7 +632,7 @@ def re2g_index_file(filename: str) -> Path:
         )
     url = (f"https://huggingface.co/datasets/genogrove/canopy/resolve/"
            f"{RE2G_INDEX_COMMIT}/re2g/{filename}")
-    return _download(url, manifest[filename], dest)
+    return _download(url, manifest[filename], dest, label=f"rE2G {filename}")
 
 
 def re2g_cohorts() -> list[dict]:
