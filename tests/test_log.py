@@ -76,3 +76,17 @@ def test_finish_and_abort_agree_on_clearing(capsys) -> None:
     p.advance(1000)
     p.finish()
     assert "done" in capsys.readouterr().err
+
+
+def test_describe_targets_names_what_is_being_looked_up() -> None:
+    """A log line saying only "loading enhancers" leaves the reader unable to tell a
+    wrong-gene answer from a right one."""
+    from genogrove_canopy.cli import _describe_targets as d
+
+    assert d([{"gene": "AR"}]) == "gene AR"
+    assert d([{"gene": "AR"}, {"gene": "MYC"}]) == "genes AR, MYC"
+    assert d([{"region": "chr8:1-2"}]) == "region chr8:1-2"
+    assert d([{"region": "a"}, {"region": "b"}]) == "2 regions"
+    assert d([{"gene": "AR"}, {"region": "chr8:1-2"}]) == "gene AR and region chr8:1-2"
+    assert d([]) == "the declared targets"      # never an empty phrase mid-sentence
+    assert d([{"unknown": "x"}]) == "the declared targets"
