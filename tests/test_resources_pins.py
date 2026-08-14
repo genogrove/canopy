@@ -225,3 +225,34 @@ def test_cache_location_is_overridable(monkeypatch) -> None:
     finally:
         monkeypatch.delenv("GENOGROVE_CANOPY_CACHE")
         importlib.reload(resources)
+
+
+def test_re2g_digest_is_recorded_and_readable(monkeypatch, tmp_path) -> None:
+    """rE2G is the one layer fetched without a pinned checksum, so record what arrived.
+
+    Pinning all 369 cohorts is a separate question (#20); this makes drift *detectable* after
+    the fact rather than invisible, which is the part that costs nothing.
+    """
+    monkeypatch.setattr(resources, "_CACHE", tmp_path)
+    raw = tmp_path / "raw.bed.gz"
+    raw.write_bytes(b"chr1\t1\t2\tgene\n")
+
+    digest = resources._record_re2g_digest("ENCSR000AAA", raw)
+    assert len(digest) == 64
+    assert resources.re2g_digest("ENCSR000AAA") == digest
+
+
+def test_re2g_provenance_is_honest_about_what_it_does_not_know(monkeypatch, tmp_path) -> None:
+    """A cohort cached before digests were recorded reports an empty string, not a guess.
+
+    The raw BED is deleted after indexing, so there is nothing to back-fill from — the indexed
+    file has been re-sorted and re-compressed and would hash differently.
+    """
+    monkeypatch.setattr(resources, "_CACHE", tmp_path)
+    raw = tmp_path / "raw.bed.gz"
+    raw.write_bytes(b"x")
+    known = resources._record_re2g_digest("ENCSR000KNW", raw)
+
+    prov = resources.re2g_provenance(["ENCSR000KNW", "ENCSR000UNK"])
+    assert prov["ENCSR000KNW"] == known
+    assert prov["ENCSR000UNK"] == "", "an unknown digest must not be reported as anything else"
