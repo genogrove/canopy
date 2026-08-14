@@ -25,6 +25,7 @@ import tempfile
 import urllib.request
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -582,6 +583,58 @@ _ONTOLOGY_AXIS = {"UBERON": "tissue", "CL": "cell type", "CLO": "cell line",
                   "EFO": "cell line", "NTR": "novel term"}
 
 
+
+# --------------------------------------------------------------------------- #
+# ENCODE-rE2G index bundle — the enhancer→gene layer, pinned per file.
+#
+# 369 cohorts x (byEnhancer, byTargetGene) x (.tsv.gz, .tbi) = 1,476 files, ~3 GB. Too many for
+# `RESOURCES`, which is a hand-written catalog of named datasets, so the checksums live in a
+# manifest shipped with the package and the URL is derived from one pinned commit.
+#
+# These are the *derived* bgzip+tabix files a query reads, not the raw ENCODE BEDs: pinning them
+# means a user needs no htslib and no local sort/index step, and gets exactly the bytes the
+# published results were computed from.
+# --------------------------------------------------------------------------- #
+
+#: Immutable commit holding the index bundle. Same rule as every other pin — never a branch.
+RE2G_INDEX_COMMIT = "38283ced34d85edfe6ee2b936ca7f17db535bd84"
+RE2G_INDEX_MANIFEST = Path(__file__).resolve().parent / "data" / "re2g_index.manifest.tsv"
+
+
+@lru_cache(maxsize=1)
+def re2g_index_manifest() -> dict[str, str]:
+    """``{filename: sha256}`` for every file in the pinned rE2G index bundle."""
+    out = {}
+    with open(RE2G_INDEX_MANIFEST, encoding="utf-8") as fh:
+        next(fh)  # header
+        for line in fh:
+            name, digest, _size = line.rstrip("\n").split("\t")
+            out[name] = digest
+    return out
+
+
+def re2g_index_file(filename: str) -> Path:
+    """Resolve one file of the rE2G index bundle, downloading + verifying it on first use.
+
+    Per file rather than per bundle: a question about one cohort should not pull 3 GB. The four
+    files a cohort needs are ~8 MB together.
+    """
+    dest = _CACHE / "re2g_index" / filename
+    if dest.exists():
+        return dest
+    manifest = re2g_index_manifest()
+    if filename not in manifest:
+        raise KeyError(f"{filename!r} is not in the pinned rE2G index manifest")
+    if not RE2G_INDEX_COMMIT:
+        raise RuntimeError(
+            "no rE2G index commit is pinned, so the enhancer layer cannot be fetched. "
+            "Set RE2G_INDEX_COMMIT to the genogrove/canopy commit holding `re2g/`."
+        )
+    url = (f"https://huggingface.co/datasets/genogrove/canopy/resolve/"
+           f"{RE2G_INDEX_COMMIT}/re2g/{filename}")
+    return _download(url, manifest[filename], dest, label=f"rE2G {filename}")
+
+
 def re2g_cohorts() -> list[dict]:
     """The catalog grouped into **cohorts** — one per biosample (its ontology id), folding
     the replicate accessions together. This is the request→biosample association layer: an
@@ -626,6 +679,45 @@ def _re2g_edge_href(accession: str) -> str:
     raise RuntimeError(f"no default thresholded rE2G BED found for {accession}")
 
 
+
+def _re2g_digest_path(accession: str) -> Path:
+    return _CACHE / "re2g" / f"{accession}.sha256"
+
+
+def _record_re2g_digest(accession: str, raw: Path) -> str:
+    """Record the sha256 of the rE2G BED that was actually fetched.
+
+    Unlike every other dataset, rE2G is resolved on demand from ENCODE with no pinned checksum
+    (`_download(..., "")`), so a rerun can silently receive different bytes. Pinning all 369
+    cohorts is a separate question; recording what *this* machine fetched costs one hash of a
+    ~12 MB file and makes the drift detectable after the fact instead of invisible.
+
+    Written beside the cached index and kept after the raw BED is discarded, so the provenance
+    outlives the file it describes.
+    """
+    digest = hashlib.sha256(raw.read_bytes()).hexdigest()
+    path = _re2g_digest_path(accession)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(digest, encoding="utf-8")
+    return digest
+
+
+def re2g_digest(accession: str) -> str:
+    """The sha256 recorded for ``accession``'s rE2G BED, or ``""`` if it was cached before
+    digests were recorded (or never fetched)."""
+    path = _re2g_digest_path(accession)
+    return path.read_text(encoding="utf-8").strip() if path.exists() else ""
+
+
+def re2g_provenance(accessions: Iterable[str]) -> dict[str, str]:
+    """``{accession: sha256}`` for the rE2G files behind a run — empty string where unknown.
+
+    The counterpart to ``build_manifest`` for the one layer that is not pinned: a result can
+    state exactly which bytes produced it even though nothing guaranteed them in advance.
+    """
+    return {a: re2g_digest(a) for a in accessions}
+
+
 def re2g_indexed(accession: str) -> Path:
     """Download + bgzip + tabix-index a biosample's rE2G edge BED once; cached.
 
@@ -642,7 +734,12 @@ def re2g_indexed(accession: str) -> Path:
                 f"{tool!r} not found — install htslib for rE2G region access "
                 "(e.g. `brew install htslib` / `apt install tabix`)"
             )
-    raw = _download(_re2g_edge_href(accession), "", out.with_name("raw.bed.gz"))  # unpinned
+    from genogrove_canopy.log import say
+
+    say(f"Fetching ENCODE-rE2G {accession} — unpinned, verifying nothing")
+    raw = _download(_re2g_edge_href(accession), "", out.with_name("raw.bed.gz"))
+    digest = _record_re2g_digest(accession, raw)  # not pinned, so at least record what arrived
+    say(f"rE2G {accession}: sha256 {digest[:12]}… recorded (see canopy#20)")
     tmp = out.with_name("indexed.tmp.bed.gz")
     q = shlex.quote(str(raw))
     # Comment/header ('#') lines first, then data sorted by (chrom, start) for tabix.
