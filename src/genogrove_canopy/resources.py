@@ -25,6 +25,7 @@ import tempfile
 import urllib.request
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -580,6 +581,58 @@ def re2g_accessions(biosample_term: str) -> list[str]:
 # by axis without any external ontology file.
 _ONTOLOGY_AXIS = {"UBERON": "tissue", "CL": "cell type", "CLO": "cell line",
                   "EFO": "cell line", "NTR": "novel term"}
+
+
+
+# --------------------------------------------------------------------------- #
+# ENCODE-rE2G index bundle — the enhancer→gene layer, pinned per file.
+#
+# 369 cohorts x (byEnhancer, byTargetGene) x (.tsv.gz, .tbi) = 1,476 files, ~3 GB. Too many for
+# `RESOURCES`, which is a hand-written catalog of named datasets, so the checksums live in a
+# manifest shipped with the package and the URL is derived from one pinned commit.
+#
+# These are the *derived* bgzip+tabix files a query reads, not the raw ENCODE BEDs: pinning them
+# means a user needs no htslib and no local sort/index step, and gets exactly the bytes the
+# published results were computed from.
+# --------------------------------------------------------------------------- #
+
+#: Immutable commit holding the index bundle. Same rule as every other pin — never a branch.
+RE2G_INDEX_COMMIT = "38283ced34d85edfe6ee2b936ca7f17db535bd84"
+RE2G_INDEX_MANIFEST = Path(__file__).resolve().parent / "data" / "re2g_index.manifest.tsv"
+
+
+@lru_cache(maxsize=1)
+def re2g_index_manifest() -> dict[str, str]:
+    """``{filename: sha256}`` for every file in the pinned rE2G index bundle."""
+    out = {}
+    with open(RE2G_INDEX_MANIFEST, encoding="utf-8") as fh:
+        next(fh)  # header
+        for line in fh:
+            name, digest, _size = line.rstrip("\n").split("\t")
+            out[name] = digest
+    return out
+
+
+def re2g_index_file(filename: str) -> Path:
+    """Resolve one file of the rE2G index bundle, downloading + verifying it on first use.
+
+    Per file rather than per bundle: a question about one cohort should not pull 3 GB. The four
+    files a cohort needs are ~8 MB together.
+    """
+    dest = _CACHE / "re2g_index" / filename
+    if dest.exists():
+        return dest
+    manifest = re2g_index_manifest()
+    if filename not in manifest:
+        raise KeyError(f"{filename!r} is not in the pinned rE2G index manifest")
+    if not RE2G_INDEX_COMMIT:
+        raise RuntimeError(
+            "no rE2G index commit is pinned, so the enhancer layer cannot be fetched. "
+            "Set RE2G_INDEX_COMMIT to the genogrove/canopy commit holding `re2g/`."
+        )
+    url = (f"https://huggingface.co/datasets/genogrove/canopy/resolve/"
+           f"{RE2G_INDEX_COMMIT}/re2g/{filename}")
+    return _download(url, manifest[filename], dest)
 
 
 def re2g_cohorts() -> list[dict]:

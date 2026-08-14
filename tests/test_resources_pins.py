@@ -256,3 +256,36 @@ def test_re2g_provenance_is_honest_about_what_it_does_not_know(monkeypatch, tmp_
     prov = resources.re2g_provenance(["ENCSR000KNW", "ENCSR000UNK"])
     assert prov["ENCSR000KNW"] == known
     assert prov["ENCSR000UNK"] == "", "an unknown digest must not be reported as anything else"
+
+
+def test_re2g_index_manifest_is_complete_and_well_formed() -> None:
+    """Every rE2G index file is pinned by a full sha256.
+
+    369 cohorts x (byEnhancer, byTargetGene) x (.tsv.gz, .tbi). Kept in a manifest rather than
+    `RESOURCES` because 1,476 hand-written entries would drown the curated catalog.
+    """
+    manifest = resources.re2g_index_manifest()
+    assert len(manifest) == 1476, f"expected 1476 pinned files, got {len(manifest)}"
+    bad = [n for n, d in manifest.items() if not re.fullmatch(r"[0-9a-f]{64}", d)]
+    assert not bad, f"not full sha256 digests: {bad[:3]}"
+    for suffix in ("byEnhancer.tsv.gz", "byEnhancer.tsv.gz.tbi",
+                   "byTargetGene.tsv.gz", "byTargetGene.tsv.gz.tbi"):
+        assert f"EFO_0005726.{suffix}" in manifest, f"flagship cohort missing {suffix}"
+
+
+def test_re2g_index_commit_is_immutable() -> None:
+    """The bundle is pinned to a commit, never a branch — same rule as every other artifact."""
+    assert re.fullmatch(r"[0-9a-f]{40}", resources.RE2G_INDEX_COMMIT), (
+        f"RE2G_INDEX_COMMIT must be a full commit sha (got {resources.RE2G_INDEX_COMMIT!r})"
+    )
+
+
+def test_re2g_index_file_refuses_anything_unpinned(monkeypatch, tmp_path) -> None:
+    """A filename outside the manifest has no checksum, so it must not be fetched at all."""
+    monkeypatch.setattr(resources, "_CACHE", tmp_path)
+    try:
+        resources.re2g_index_file("EFO_9999999.byEnhancer.tsv.gz")
+    except KeyError as exc:
+        assert "manifest" in str(exc)
+    else:
+        raise AssertionError("fetched a file with no pinned checksum")

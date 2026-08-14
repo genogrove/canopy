@@ -25,8 +25,10 @@ from pathlib import Path
 from genogrove_canopy import resources
 from genogrove_canopy.layers._base import Layer
 
-# The 3 GB index bundle lives in the cache (downloaded on demand later, like the GENCODE .gg);
-# present locally for now. gene_tss ships in the package (small).
+# The index bundle is pinned per file on Hugging Face and fetched a cohort at a time — four files,
+# ~8 MB, not the whole 3 GB. Until it was pinned this directory had to be built locally, so a
+# cohort absent from it made `fetch_for_targets` silently return nothing on every machine but the
+# one that built it. gene_tss ships in the package (small).
 INDEX_DIR = resources._CACHE / "re2g_index"
 # Package data lives in genogrove_canopy/data/; this module is in genogrove_canopy/layers/,
 # so go up one level.
@@ -163,7 +165,7 @@ def fetch_for_targets(targets, cohorts) -> list[dict]:
     by_ens, _ = _gene_tss()
     out, seen = [], set()
     for cohort in cohorts:
-        if not index_present(cohort):
+        if not ensure_index(cohort):
             continue
         for t in targets or []:
             if t.get("gene"):
@@ -199,10 +201,31 @@ def preamble(records) -> str:
 
 
 def index_present(cohort: str) -> bool:
-    """True if both index files exist for ``cohort`` (else it must be downloaded/built)."""
+    """True if both index files are already cached for ``cohort`` — no fetching."""
     s = _slug(cohort)
     return (INDEX_DIR / f"{s}.byTargetGene.tsv.gz").exists() and \
            (INDEX_DIR / f"{s}.byEnhancer.tsv.gz").exists()
+
+
+def ensure_index(cohort: str) -> bool:
+    """Make ``cohort``'s index available, downloading the four pinned files if needed.
+
+    Returns False when the cohort is not in the pinned bundle — a real answer ("we have no rE2G
+    data for that biosample"), distinct from a failure. Anything else propagates: a checksum
+    mismatch or a dead network should not quietly become "no enhancers found".
+    """
+    if index_present(cohort):
+        return True
+    slug = _slug(cohort)
+    names = [f"{slug}.{kind}{suffix}"
+             for kind in ("byEnhancer.tsv.gz", "byTargetGene.tsv.gz")
+             for suffix in ("", ".tbi")]
+    manifest = resources.re2g_index_manifest()
+    if any(n not in manifest for n in names):
+        return False
+    for name in names:
+        resources.re2g_index_file(name)
+    return True
 
 
 LAYER = Layer(
