@@ -70,8 +70,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   answer, so a slow LLM call, a slow rE2G lookup and a slow grove query were indistinguishable. Each
   stage now logs with its own timing, and the enhancer line names what it looked up and in which
   cohort — `Loading ENCODE-rE2G links for gene AR — cohort(s) LNCaP clone FGC`, then
-  `rE2G: 22 enhancer→gene link(s) (0.4s)`. The reported total now includes the rE2G
-  fetch, which previously sat between the two timers and was counted in neither ([#21](https://github.com/genogrove/canopy/pull/21)).
+  `rE2G: 22 enhancer→gene link(s) (0.4s)`. The reported total includes the rE2G fetch,
+  which sits between the two timers ([#21](https://github.com/genogrove/canopy/pull/21)).
 - **Readable `text` output**: an enhancer answer repeated `type`, `strand`, `n`, `cohort` and
   `target` identically down every row while dumping raw dicts for `ccre_overlap`, pushing lines past
   200 characters so the columns that differed scrolled off. Constant columns are now stated once

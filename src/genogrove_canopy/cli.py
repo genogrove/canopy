@@ -397,7 +397,7 @@ def _answer(question, *, system_prompt, preamble, args, execute):
         elif note and note != "default":
             log.say(note)
         elif cohort_ids:
-            log.took("rE2G: no links for those targets in this cohort", enh_s)
+            log.say("rE2G: no links for those targets in this cohort")
     # JSONL is the output contract, so guarantee `json` is importable even if the
     # generated code forgets the import (it's already in the allowlist).
     log.say("Running the query over the grove")
