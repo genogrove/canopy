@@ -110,7 +110,7 @@ def enhancers_in_region(chrom: str, start: int, end: int, cohort: str) -> list[d
     return _query(INDEX_DIR / f"{_slug(cohort)}.byEnhancer.tsv.gz", f"{chrom}:{start}-{end}", 0)
 
 
-def attach_links(grove, path, cohort):
+def attach_links(grove, path, cohort, nodes=None):
     """Attach one cohort's links to a **mutable** ``grove``, from the plain table at ``path``.
 
     One **node per element** — an enhancer is one piece of DNA however many genes it regulates —
@@ -122,11 +122,15 @@ def attach_links(grove, path, cohort):
     The score belongs to the *link*, not to the interval, which is why it sits on the edge. The
     ``byCohort`` map is what makes a second cohort's call **merge** onto the same node and edge
     pair instead of adding a parallel node/edge: pygenogrove happily stores two edges between one
-    pair, so the merge is done here — reuse the element node already at that interval, and fold
-    the new cohort into the existing edge's map. ``regulated_by`` is stored as well so
-    "its enhancers" from a gene is one plain ``get_neighbors_if`` hop.
+    pair, so the merge is done here. ``nodes`` is the caller-owned element cache (interval ->
+    Key) that makes it possible — pass the **same dict** for every cohort attached to one grove,
+    as ``preamble`` does. A dict lookup is what keeps a cohort at ~8 s; finding the node by
+    ``intersect`` instead cost 10 s more per cohort (408k lookups, measured). An element first
+    seen in this call cannot yet carry another cohort's edge, so only shared elements pay the
+    edge scan. ``regulated_by`` is stored as well so "its enhancers" from a gene is one plain
+    ``get_neighbors_if`` hop.
 
-    Returns ``(elements, links, missed)``.
+    Returns ``(elements, links, missed)`` — ``elements`` is the size of ``nodes`` after the call.
 
     **This function is also shipped into the sandbox as source text** (see ``preamble``), so it
     must stay self-contained: everything it needs is imported inside it or passed in — no module
@@ -135,7 +139,9 @@ def attach_links(grove, path, cohort):
     """
     import pygenogrove as pg
 
-    genes, nodes, links, missed = {}, {}, 0, 0
+    genes, links, missed = {}, 0, 0
+    nodes = nodes if nodes is not None else {}
+    new = set()  # elements this call inserted: no other cohort's edge can hang off them yet
     with open(path) as fh:
         for ln in fh:
             chrom, start, end, cls, ens, tchrom, tss, n_rep, s_mean, s_max = \
@@ -157,20 +163,18 @@ def attach_links(grove, path, cohort):
                 missed += 1
                 continue
             ek = (chrom, int(start), int(end) - 1)  # rE2G BED half-open -> grove 0-based closed
-            if ek not in nodes:  # one node per element — also across calls: a previous cohort
-                nodes[ek] = next(  # may already have inserted this exact interval
-                    (k for k in grove.intersect(pg.GenomicCoordinate("*", ek[1], ek[2]), chrom)
-                     if k.data.get("source") == "ENCODE-rE2G"
-                     and (k.value.start, k.value.end) == ek[1:]),
-                    None,
-                ) or grove.insert(chrom, pg.GenomicCoordinate(".", ek[1], ek[2]),
-                                  {"type": "enhancer", "source": "ENCODE-rE2G", "class": cls})
-            node = nodes[ek]
-            # Edge payloads come back as copies, so a link already present from another cohort
-            # is merged by removing the pair and re-adding it with the union of `byCohort`.
-            by = next((m["byCohort"] for t, m in grove.get_edge_list(node)
-                       if m and m.get("rel") == "regulates"
-                       and t.data.get("id") == gene.data.get("id")), None)
+            node, by = nodes.get(ek), None
+            if node is None:  # one node per element, across every cohort attached to this grove
+                node = nodes[ek] = grove.insert(chrom, pg.GenomicCoordinate(".", ek[1], ek[2]),
+                                                {"type": "enhancer", "source": "ENCODE-rE2G",
+                                                 "class": cls})
+                new.add(ek)
+            elif ek not in new:  # shared element: another cohort may already link it to this
+                # gene (within one cohort a link is unique, so a node made here needs no scan).
+                # payloads come back as copies, so merge = remove the pair, re-add the union.
+                by = next((m["byCohort"] for t, m in grove.get_edge_list(node)
+                           if m and m.get("rel") == "regulates"
+                           and t.data.get("id") == gene.data.get("id")), None)
             if by is not None:
                 grove.remove_edge(node, gene)
                 grove.remove_edge(gene, node)
@@ -279,7 +283,7 @@ def preamble(gg: str, cohort_links: dict[str, str] | None = None) -> str:
     import inspect
 
     attach_calls = "".join(
-        f"    attach_links(GROVE, {json.dumps(links)}, {json.dumps(cohort)})\n"
+        f"    attach_links(GROVE, {json.dumps(links)}, {json.dumps(cohort)}, _nodes)\n"
         for cohort, links in cohort_links.items()
     )
     return (
@@ -291,6 +295,7 @@ def preamble(gg: str, cohort_links: dict[str, str] | None = None) -> str:
         "    GROVE = _state['grove']\n"
         "else:\n"
         f"    GROVE = pg.Grove.deserialize({json.dumps(gg)})\n"
+        "    _nodes = {}\n"                                  # one element cache across cohorts
         f"{attach_calls}"
         "    if _state is not None:\n"
         "        _state.clear()\n"                        # one grove at a time; see the docstring

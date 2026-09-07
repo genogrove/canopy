@@ -63,8 +63,8 @@ def test_preamble_with_cohorts_attaches_each_onto_one_grove():
     pre = enhancers.preamble(
         "/tmp/x.gg", {"EFO:0005726": "/tmp/a.tsv", "EFO:0009318": "/tmp/b.tsv"})
     assert 'GROVE = pg.Grove.deserialize("/tmp/x.gg")' in pre
-    assert 'attach_links(GROVE, "/tmp/a.tsv", "EFO:0005726")' in pre
-    assert 'attach_links(GROVE, "/tmp/b.tsv", "EFO:0009318")' in pre
+    assert 'attach_links(GROVE, "/tmp/a.tsv", "EFO:0005726", _nodes)' in pre
+    assert 'attach_links(GROVE, "/tmp/b.tsv", "EFO:0009318", _nodes)' in pre
     assert "_CANOPY_STATE" in pre
     compile(pre, "<preamble>", "exec")
 
@@ -116,8 +116,9 @@ def test_attach_links_merges_a_second_cohort_onto_one_node_and_edge(tmp_path):
     a.write_text("chr1\t100\t200\tintergenic\tENSG1\tchr1\t1000\t1\t0.5\t0.9\n")
     b.write_text("chr1\t100\t200\tintergenic\tENSG1\tchr1\t1000\t2\t0.4\t0.7\n"
                  "chr1\t300\t400\tintergenic\tENSG1\tchr1\t1000\t1\t0.1\t0.2\n")
-    assert enhancers.attach_links(g, a, "C1") == (1, 1, 0)
-    assert enhancers.attach_links(g, b, "C2") == (2, 2, 0)
+    nodes = {}  # shared across cohorts, as the preamble does
+    assert enhancers.attach_links(g, a, "C1", nodes) == (1, 1, 0)
+    assert enhancers.attach_links(g, b, "C2", nodes) == (2, 2, 0)
 
     gene = next(k for k in g.intersect(pg.GenomicCoordinate("*", 1500, 1500), "chr1"))
     enh = [k for k in g.intersect(pg.GenomicCoordinate("*", 150, 150), "chr1")
