@@ -91,10 +91,24 @@ def attach_tracked(grove, records):
     """
     import pygenogrove as pg
 
+    # A breakend at base `pos` (0-based) with strand "+" keeps that base — the cut is
+    # between pos and pos+1 — while "-" continues from `pos` onward, so its cut is between
+    # pos-1 and pos. A cut is recorded as the start of the segment to its right.
+    def cut(pos, strand):
+        return pos + 1 if strand == "+" else pos
+
     positions_by_chrom: dict[str, set] = {}
     for r in records:
-        positions_by_chrom.setdefault(r["chrom1"], set()).add(int(r["start1"]))
-        positions_by_chrom.setdefault(r["chrom2"], set()).add(int(r["start2"]))
+        positions_by_chrom.setdefault(r["chrom1"], set()).add(cut(int(r["start1"]), r["strand1"]))
+        positions_by_chrom.setdefault(r["chrom2"], set()).add(cut(int(r["start2"]), r["strand2"]))
+
+    # Segment starts per chromosome: a leading segment from 0 up to the first cut, then one
+    # per cut. Closed coordinates, so each ends one base before the next start. The trailing
+    # segment is a stub, `[last_cut, last_cut + 1]`.
+    # ponytail: stub instead of the real chromosome end; ship GRCh38 lengths if a walk ever
+    # needs the true telomeric extent.
+    starts_by_chrom = {c: (cuts if cuts[0] == 0 else [0] + cuts)
+                       for c, cuts in ((c, sorted(p)) for c, p in positions_by_chrom.items())}
 
     created = []
     seg_by_chrom_pos: dict[tuple, object] = {}  # (chrom, seg_start) -> segment Key
@@ -122,7 +136,7 @@ def attach_tracked(grove, records):
                 )
             if target is None:
                 target = grove.insert(
-                    chrom, pg.GenomicCoordinate(".", bin_start, bin_start + _BIN),
+                    chrom, pg.GenomicCoordinate(".", bin_start, bin_start + _BIN - 1),
                     {"type": "intergenic_region"},
                 )
                 created.append((chrom, target))
@@ -131,21 +145,20 @@ def attach_tracked(grove, records):
         grove.add_edge(seg_key, target, {"rel": "anchored_to"})
 
     def segment_for(chrom, pos, strand):
-        # A breakpoint sits exactly at a cut point, which borders two segments —
-        # strand says which one: "+" continues via the segment ENDING here, "-"
-        # via the segment STARTING here (standard breakend orientation).
-        cuts = sorted(positions_by_chrom[chrom])
-        i = cuts.index(pos)
+        # A breakend's cut borders two segments — strand says which one: "+" continues
+        # via the segment ENDING at the cut (the one starting at the previous boundary),
+        # "-" via the segment STARTING there (standard breakend orientation).
+        starts = starts_by_chrom[chrom]
+        i = starts.index(cut(pos, strand))
         if strand == "+" and i > 0:
-            return cuts[i - 1]
-        return cuts[i]
+            return starts[i - 1]
+        return starts[i]
 
     # Cut each chromosome into segments from ALL of this sample's breakpoints on
     # it together (not per SV), anchoring each new segment as it's created.
-    for chrom, positions in positions_by_chrom.items():
-        cuts = sorted(positions)
-        bounds = list(zip(cuts, cuts[1:] + [cuts[-1] + 1]))
-        for seg_start, seg_end in bounds:
+    for chrom, starts in starts_by_chrom.items():
+        ends = [nxt - 1 for nxt in starts[1:]] + [starts[-1] + 1]
+        for seg_start, seg_end in zip(starts, ends):
             key = grove.insert(chrom, pg.GenomicCoordinate(".", seg_start, seg_end),
                                 {"type": _SEG_TYPE, "sample": sample})
             created.append((chrom, key))

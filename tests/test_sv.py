@@ -40,8 +40,12 @@ def test_translocation_anchors_both_genes_and_connects_segments():
     n, created = sv.attach_tracked(g, records)
     assert n == 1
 
-    seg1 = next(k for chrom, k in created if chrom == "chr1" and k.data["type"] == "sv_segment")
-    seg2 = next(k for chrom, k in created if chrom == "chr2" and k.data["type"] == "sv_segment")
+    # "+" at 1500 keeps base 1500: the joined segment is chr1:[0, 1500]. "-" at 5500 continues
+    # from base 5500: chr2:[5500, ...]. Each cut also leaves the far side as its own segment.
+    segs = {(c, k.value.start, k.value.end) for c, k in created if k.data["type"] == "sv_segment"}
+    assert segs == {("chr1", 0, 1500), ("chr1", 1501, 1502), ("chr2", 0, 5499), ("chr2", 5500, 5501)}
+    seg1 = next(k for c, k in created if c == "chr1" and k.value.start == 0)
+    seg2 = next(k for c, k in created if c == "chr2" and k.value.start == 5500)
 
     assert _anchor(g, seg1).data["id"] == "A"
     assert _anchor(g, seg2).data["id"] == "B"
@@ -63,7 +67,7 @@ def test_one_breakpoint_intergenic_creates_bin():
 
     bins = [k for _, k in created if k.data["type"] == "intergenic_region"]
     assert len(bins) == 1
-    assert (bins[0].value.start, bins[0].value.end) == (0, 1_000_000)
+    assert (bins[0].value.start, bins[0].value.end) == (0, 999_999)  # 0-based closed
 
     far_seg = next(k for _, k in created
                    if k.data["type"] == "sv_segment" and k.value.start == 50000)
@@ -91,12 +95,13 @@ def test_two_svs_sharing_one_gene_get_independent_edges():
     n, created = sv.attach_tracked(g, records)
     assert n == 2
 
-    gene_seg = next(k for _, k in created
-                     if k.data["type"] == "sv_segment" and k.value.start == 1500)
-    assert _anchor(g, gene_seg).data["id"] == "D"
-
-    sv_ids = {e["sv_id"] for e in g.get_edges(gene_seg) if e.get("rel") == "breakpoint_edge"}
-    assert sv_ids == {"SV1", "SV2"}  # both SVs reach the same gene-anchored segment, no conflict
+    # Cuts at 1501 and 3001: [0,1500] carries SV1's edge, [1501,3000] carries SV2's — both
+    # overlap gene D and anchor to it independently, and [3001,19999] is the deleted middle.
+    gene_segs = [k for _, k in created if k.data["type"] == "sv_segment"
+                 and _anchor(g, k).data.get("id") == "D"]
+    assert sorted((k.value.start, k.value.end) for k in gene_segs) == [(0, 1500), (1501, 3000), (3001, 19999)]
+    sv_ids = {e["sv_id"] for k in gene_segs for e in g.get_edges(k) if e.get("rel") == "breakpoint_edge"}
+    assert sv_ids == {"SV1", "SV2"}
 
 
 def test_insertion_carries_payload_instead_of_second_segment():
@@ -106,7 +111,10 @@ def test_insertion_carries_payload_instead_of_second_segment():
     n, created = sv.attach_tracked(g, records)
     assert n == 1
 
-    seg1 = next(k for _, k in created if k.value.start == 100)
+    # 100(+) / 101(-) is one cut between bases 100 and 101: two segments, no orphan in between.
+    segs = sorted((k.value.start, k.value.end) for _, k in created if k.data["type"] == "sv_segment")
+    assert segs == [(0, 100), (101, 102)]
+    seg1 = next(k for _, k in created if k.value.start == 0)
     match = next(e for e in g.get_edges(seg1) if e.get("sv_id") == "SV1")
     assert match["svclass"] == "INS"
     assert match["length"] == "50" and match["insertion_class"] == "MEI"
@@ -142,3 +150,17 @@ def test_parse_bedpe(tmp_path):
         "sv_id": "SV1", "pe_support": "5", "strand1": "+", "strand2": "-",
         "svclass": "DEL", "svmethod": "m",
     }]
+
+
+def test_deletion_joins_flanks_and_orphans_the_deleted_middle():
+    """The first '+' breakend on a chromosome used to fall through to the segment STARTING at the
+    cut, so a lone DEL joined the deleted piece itself to the downstream flank. There is now a
+    leading segment from 0, so upstream -> downstream is the edge and the middle is unreached."""
+    g = pg.Grove(order=100)
+    records = [_sv("S1", "SV1", "chr1", 1500, "+", "chr1", 20000, "-", "DEL")]
+    _, created = sv.attach_tracked(g, records)
+    by_start = {k.value.start: k for _, k in created if k.data["type"] == "sv_segment"}
+    assert sorted((k.value.start, k.value.end) for k in by_start.values()) == [
+        (0, 1500), (1501, 19999), (20000, 20001)]
+    assert _edge_neighbor(g, by_start[0], "SV1").value.start == 20000
+    assert not g.get_neighbors_if(by_start[1501], lambda m: m and m.get("rel") == "breakpoint_edge")
