@@ -140,7 +140,9 @@ def _grove_context():
         var, resources.RESOURCES[_BASE].description, layers.catalogue_block(["ccre"])
     )
     preamble = f"{var} = {json.dumps(gg)}\nENHANCERS = []\n"
-    return block, preamble, [gg]
+    # The sandbox reads only these roots. `LINKS_DIR` is where `enhancers.preamble`'s
+    # `attach_links` opens a cohort's links table, so it must be granted alongside the grove.
+    return block, preamble, [gg, str(layers.enhancers.LINKS_DIR)]
 
 
 def resources_block(var: str, description: str, layers_block: str) -> str:
