@@ -13,7 +13,11 @@ jobs:
       contents: read
       pull-requests: write
     steps:
+      # `gh pr create --fill` derives its default title/body from `git diff` against
+      # origin/main, so main must be fetched too — the default checkout is single-branch.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Open a PR if one doesn't already exist for this branch
         env:
