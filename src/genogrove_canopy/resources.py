@@ -499,13 +499,17 @@ def grove_view(name: str):
 # `stop_codon`) is now dropped like every other coding-structure annotation, instead of falling
 # through to the generic foreign-layer path and getting indexed with its raw GENCODE attributes
 # — 155 stray nodes genome-wide, found by checking what the indexed `type`s actually were.
+# v8 = same content as v7, re-serialized under the pinned pygenogrove 0.9.0 (stream format 0.3).
+# The v7 artifact was written by a stale 0.7.4 install (format 0.2), which 0.9.0 rejects with
+# "bad magic" — and a cached copy is never re-fetched, so the only way to heal an install that
+# already held it is a new schema directory.
 #
 # The bump is load-bearing, not cosmetic: this value is part of the cache directory
 # (`_grove_dir`), but the rest of that key is the *annotation's* sha256 — which did not change when
 # `grove_url` was re-pinned. Without the bump, anyone holding a cached `_all.gg` from the old
 # GENCODE-only Zenodo artifact would keep being served it forever, since `ensure_all_grove` returns
 # early on an existing path and never re-checks the URL.
-_GROVE_SCHEMA = "7"
+_GROVE_SCHEMA = "8"
 
 
 def _grove_dir(name: str) -> Path:
