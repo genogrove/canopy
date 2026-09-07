@@ -45,6 +45,7 @@ class _Grove:
 
     def __init__(self, model: str) -> None:
         block, self.preamble, data_paths = _grove_context()
+        self.gg = data_paths[0]
         self.system_prompt = llm.build_system_prompt(block)
         self.model = model
         self.worker = sandbox.Worker(
@@ -105,11 +106,12 @@ def _pipeline(question: str, cohort: str, model: str, emit) -> dict:
         note = None if why == "default" else why
         cohort_ids = _cohort_ids(cohorts)
         if cohort_ids:
-            emit("step", f"Fetching enhancers for cohort(s) {'; '.join(cohorts)}")
-            records = enhancers.fetch_for_targets(targets, cohort_ids)
-            if records:
-                enh_pre = enhancers.preamble(records)
-                note = f"{len(records)} enhancer links from {'; '.join(cohorts)}" + (
+            emit("step", f"Attaching enhancers for cohort(s) {'; '.join(cohorts)}")
+            cohort_links = {cid: str(enhancers.links_file(cid))
+                            for cid in cohort_ids if enhancers.ensure_index(cid)}
+            if cohort_links:
+                enh_pre = enhancers.preamble(grove.gg, cohort_links)
+                note = f"enhancers attached from {'; '.join(cohorts)}" + (
                     " (default)" if why == "default" else "")
 
     emit("step", "Running the query over the grove")

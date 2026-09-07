@@ -421,6 +421,13 @@ except Exception:
 _WORKER_LOOP = '''\
 _IN, _OUT = _sys.stdin.buffer, _sys.__stdout__.buffer
 
+# Survives between queries, unlike the exec namespace below, which is fresh each time so one
+# query cannot see another's variables. The preamble memoises an opened/augmented grove here:
+# building a cohort's grove costs seconds, and re-paying that per question is the whole reason
+# the worker exists. Only the host-emitted preamble writes to it; a stale entry is a wrong
+# answer, so it is keyed by everything the grove was built from.
+_CANOPY_STATE = {}
+
 def _read_exact(n):
     b = b""
     while len(b) < n:
@@ -441,7 +448,8 @@ while True:
     _so, _se, _rc = _sys.stdout, _sys.stderr, 0
     _sys.stdout, _sys.stderr = _obuf, _ebuf
     try:
-        exec(compile(_payload.decode("utf-8"), "<query>", "exec"), {"__name__": "__main__"})
+        exec(compile(_payload.decode("utf-8"), "<query>", "exec"),
+             {"__name__": "__main__", "_CANOPY_STATE": _CANOPY_STATE})
     except SystemExit:
         pass
     except BaseException:

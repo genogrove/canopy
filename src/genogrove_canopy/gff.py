@@ -23,6 +23,25 @@ reconstructed as **directed edges** with three relations:
 * ``{"rel": "next", "tx": <transcript id>}`` — a transcript's exons chained 5'->3'
   (strand-aware) from that first exon; junctions and introns (the gaps) derive from it.
 
+**Only genes are indexed. Transcripts and exons are external (graph-only) keys,
+reached by edge, not by ``intersect()``.** A gene span is already in the B+ tree, so
+a query for "what transcript/exon overlaps this position" is always answered by
+first landing on the (indexed) gene via ``intersect`` and then walking
+``contains``/``first_exon``/``next``, checking each child's own coordinates — never
+by querying the tree for transcripts or exons directly. Putting every transcript and
+exon in the tree too (GENCODE v50: ~644K transcripts, ~1.2M exon records before
+per-gene dedup, against ~79K genes) buys nothing over that walk and would bloat the
+index roughly 9x. ``add_external_key`` keeps them fully reachable by edge and
+carrying real coordinates, just outside the tree: excluded from ``intersect()`` /
+``size()``, present in ``get_neighbors``/``get_edges`` and in ``vertex_count()``.
+
+(A layer needing every position — genic or not — to resolve to *something*, e.g. a
+structural-variant layer resolving breakpoints outside every gene, computes and
+inserts its own ``intergenic_region`` coverage on demand into an already-loaded
+grove rather than this loader baking it into the shared backbone — see
+``layers/sv.py``. Ordinary ``insert()`` into an already-deserialized grove is safe;
+verified against the real production grove, not assumed.)
+
 **One exon key per physical exon, per gene.** A GFF emits an exon line for every
 transcript that uses it, so a gene's isoforms repeat the same interval over and over
 (~5x across GENCODE, and 71 records at a busy locus collapse to 18). Those are the same
@@ -56,7 +75,7 @@ from pathlib import Path
 # or dropped (UTR/codon — derived), never stored as keys.
 _DROP_TYPES = frozenset({
     "five_prime_UTR", "three_prime_UTR", "UTR", "start_codon", "stop_codon",
-    "Selenocysteine",
+    "Selenocysteine", "stop_codon_redefined_as_selenocysteine",
 })
 
 # The gene hierarchy this loader models explicitly. Anything else in a *unified* GFF is a
@@ -198,8 +217,8 @@ def _assemble(feats, cds_span):
             # within a gene (~13% of the ambiguous ones), so no single value would be honest.
             key = exon_keys.get((seqid, gid, start, end))
             if key is None:
-                key = exon_keys[(seqid, gid, start, end)] = g.insert(
-                    seqid, pg.GenomicCoordinate(strand, start, end), {"type": ftype, "name": name})
+                key = exon_keys[(seqid, gid, start, end)] = g.add_external_key(
+                    pg.GenomicCoordinate(strand, start, end), {"type": ftype, "name": name})
             for pid in parent_ids:
                 exons_by_parent.setdefault(pid, []).append((start, strand, key))
             continue
@@ -210,7 +229,13 @@ def _assemble(feats, cds_span):
         if ftype == "transcript":
             lo_hi = cds_span.get(fid)
             payload["cds_start"], payload["cds_end"] = lo_hi if lo_hi else (None, None)
-        key = g.insert(seqid, pg.GenomicCoordinate(strand, start, end), payload)
+            # External, like exons: reached only via its gene's `contains` edge, never
+            # by intersect() directly. Nothing needs "which transcript is at this exact
+            # position" independent of its gene (measured 8.18 transcripts/gene on the
+            # real backbone — indexing them bought nothing over the walk).
+            key = g.add_external_key(pg.GenomicCoordinate(strand, start, end), payload)
+        else:
+            key = g.insert(seqid, pg.GenomicCoordinate(strand, start, end), payload)
         if fid is not None and fid not in by_id:
             by_id[fid] = key  # gene/transcript IDs are unique; first wins on shared-ID leaves
         for pid in parent_ids:
@@ -261,17 +286,20 @@ def build_grove(gff_path, region=""):
 
     ``region`` is a tabix string (1-based inclusive), e.g. ``"chr7:55000000-55300000"``;
     ``""`` reads the whole file. Returns the same universal Grove as ``load_gff``
-    (gene/transcript/exon keys, contains/first_exon/next edges, cds folded onto
-    exons). Only features **overlapping** ``region`` are loaded — pick a region that
-    covers the features your query needs (a point for "what overlaps here", a gene's
-    span for its full structure).
+    (indexed gene/transcript keys, external exon keys, contains/first_exon/next
+    edges, cds folded onto exons). Only features **overlapping** ``region`` are
+    loaded — pick a region that covers the features your query needs (a point for
+    "what overlaps here", a gene's span for its full structure). An exon at the
+    edge of ``region`` is only reachable if its transcript is too — walk from the
+    transcript, don't expect ``intersect`` to find exons directly.
 
     Self-contained (only ``pygenogrove``) on purpose: its source is injected into the
     sandbox so generated code can call it without importing ``ask``.
     """
     import pygenogrove as pg
 
-    drop = {"five_prime_UTR", "three_prime_UTR", "UTR", "start_codon", "stop_codon", "Selenocysteine"}
+    drop = {"five_prime_UTR", "three_prime_UTR", "UTR", "start_codon", "stop_codon",
+            "Selenocysteine", "stop_codon_redefined_as_selenocysteine"}
     feats, cds = [], {}
     for e in pg.GffReader(str(gff_path), region=region):
         s, en = e.start - 1, e.end - 1  # GFF 1-based inclusive -> 0-based closed
@@ -301,11 +329,11 @@ def build_grove(gff_path, region=""):
     g = pg.Grove(order=100)
     by_id, pending, exons_by_parent, exon_keys = {}, [], {}, {}
     for seqid, s, en, strand, ftype, fid, name, biotype, pids, foreign, gid in feats:
-        if ftype == "exon":  # one key per physical exon per gene — see _assemble
+        if ftype == "exon":  # one key per physical exon per gene, external (not indexed) — see _assemble
             k = exon_keys.get((seqid, gid, s, en))
             if k is None:
-                k = exon_keys[(seqid, gid, s, en)] = g.insert(
-                    seqid, pg.GenomicCoordinate(strand, s, en), {"type": ftype, "name": name})
+                k = exon_keys[(seqid, gid, s, en)] = g.add_external_key(
+                    pg.GenomicCoordinate(strand, s, en), {"type": ftype, "name": name})
             for p in pids:
                 exons_by_parent.setdefault(p, []).append((s, strand, k))
             continue
@@ -316,7 +344,9 @@ def build_grove(gff_path, region=""):
         if ftype == "transcript":
             sp = cds.get(fid)
             pl["cds_start"], pl["cds_end"] = sp if sp else (None, None)
-        k = g.insert(seqid, pg.GenomicCoordinate(strand, s, en), pl)
+            k = g.add_external_key(pg.GenomicCoordinate(strand, s, en), pl)  # external, like exons — see _assemble
+        else:
+            k = g.insert(seqid, pg.GenomicCoordinate(strand, s, en), pl)
         if fid and fid not in by_id:
             by_id[fid] = k
         for p in pids:

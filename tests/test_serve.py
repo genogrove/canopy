@@ -96,13 +96,13 @@ def test_cohort_default_flag_is_not_display_text(monkeypatch):
     monkeypatch.setattr(serve.resources, "_all_grove_gg",
                         lambda n: type("P", (), {"exists": lambda s: True})())
     monkeypatch.setattr(serve, "_grove", lambda m: type("G", (), {
-        "system_prompt": "", "preamble": "", "model": m,
+        "system_prompt": "", "preamble": "", "gg": "", "model": m,
         "worker": type("W", (), {"submit": lambda s, c: type("R", (), {
             "returncode": 0, "timed_out": False, "stdout": "ok: 1", "stderr": ""})()})()})())
     monkeypatch.setattr(serve.llm, "generate_query",
                         lambda q, sp, model=None: ("", [{"gene": "MYC"}], "pass"))
     from genogrove_canopy.layers import enhancers
-    monkeypatch.setattr(enhancers, "fetch_for_targets", lambda targets, ids: [])
+    monkeypatch.setattr(enhancers, "ensure_index", lambda cohort: False)
 
     result = serve._pipeline("enhancers of MYC", "", "m", lambda k, m: None)
     assert result["note"] != "default"

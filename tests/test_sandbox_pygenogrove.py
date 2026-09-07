@@ -42,7 +42,7 @@ def test_sandbox_deserializes_and_queries_a_grove(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert "genes 1" in result.stdout
-    assert "size 3" in result.stdout
+    assert "size 1" in result.stdout  # only the gene is indexed; transcript + exon external
 
 
 def test_sandbox_still_blocks_network_with_pygenogrove_on_path(tmp_path):

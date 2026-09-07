@@ -357,18 +357,19 @@ def _describe_targets(targets) -> str:
     return " and ".join(parts) or "the declared targets"
 
 
-def _answer(question, *, system_prompt, preamble, args, execute):
+def _answer(question, *, system_prompt, preamble, gg, args, execute):
     """Translate one question to code, run it via ``execute(script)``, and render.
 
     ``execute`` is a ``script -> SandboxResult`` callable (``sandbox.run`` for one-shot,
     ``Worker.submit`` for interactive). Returns ``(rendered_stdout, error_msg, gen_s, enh_s,
-    exec_s)`` — exactly one of stdout/error is non-empty. Three times, not two: the rE2G fetch
-    sits between code-gen and execution, and leaving it out made the reported total wrong by
-    however long it took.
+    exec_s)`` — exactly one of stdout/error is non-empty. Three times, not two: the rE2G
+    attach sits between code-gen and execution, and leaving it out made the reported total
+    wrong by however long it took.
 
     The enhancer layer is resolved **per question**: the model declares ``COHORT``/``TARGETS``,
-    the host grounds the cohort (``--cohort`` overrides), fetches only those enhancers via the
-    tabix index, and injects them as ``ENHANCERS`` — no whole-cohort grove augment.
+    the host grounds the cohort(s) (``--cohort`` overrides, repeatable), and each cohort's links
+    are attached onto the mutable grove in the sandbox — reused warm across turns via
+    ``_CANOPY_STATE`` — rather than fetched per target and injected as a list.
     """
     log.say(f"Generating a pygenogrove query ({args.model})")
     t0 = time.perf_counter()
@@ -379,25 +380,26 @@ def _answer(question, *, system_prompt, preamble, args, execute):
         print("# --- generated code ---", file=sys.stderr)
         print(code, file=sys.stderr)
     enh_pre, enh_s = "", 0.0
-    if targets:  # an enhancer/regulation question — resolve the cohort and fetch its enhancers
+    if targets:  # an enhancer/regulation question — resolve the cohort(s) and attach their links
         from genogrove_canopy.layers import enhancers
         cohorts, note = _resolve_query_cohorts(args, cohort_hint)
         cohort_ids = _cohort_ids(cohorts)
-        records = []
+        cohort_links = {}
         if cohort_ids:  # announce only once there is somewhere to load from
             log.say(f"Loading ENCODE-rE2G links for {_describe_targets(targets)} — "
                     f"cohort(s) {'; '.join(cohorts)}")
             t_enh = time.perf_counter()
-            records = enhancers.fetch_for_targets(targets, cohort_ids)
+            cohort_links = {cid: str(enhancers.links_file(cid))
+                            for cid in cohort_ids if enhancers.ensure_index(cid)}
             enh_s = time.perf_counter() - t_enh
-        if records:
-            enh_pre = enhancers.preamble(records)
+        if cohort_links:
+            enh_pre = enhancers.preamble(gg, cohort_links)
             src = " (default — name a tissue or pass --cohort)" if note == "default" else ""
-            log.took(f"rE2G: {len(records)} enhancer→gene link(s){src}", enh_s)
+            log.took(f"rE2G: attached {'; '.join(cohorts)}{src}", enh_s)
         elif note and note != "default":
             log.say(note)
         elif cohort_ids:
-            log.took("rE2G: no links for those targets in this cohort", enh_s)
+            log.took("rE2G: no index available for those cohorts", enh_s)
     # JSONL is the output contract, so guarantee `json` is importable even if the
     # generated code forgets the import (it's already in the allowlist).
     log.say("Running the query over the grove")
@@ -430,7 +432,8 @@ def _interactive(args, *, system_prompt, preamble, data_paths, site_dir) -> int:
                 break
             try:
                 out, err, gen_s, enh_s, exec_s = _answer(question, system_prompt=system_prompt,
-                                                  preamble=preamble, args=args, execute=worker.submit)
+                                                  preamble=preamble, gg=data_paths[0], args=args,
+                                                  execute=worker.submit)
             except Exception as exc:  # e.g. an LLM error — keep the session alive
                 print(f"canopy: {exc}", file=sys.stderr)
                 continue
@@ -495,7 +498,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:  # one-shot: a fresh sandbox per invocation
         out, err, _gen_s, _enh_s, _exec_s = _answer(
-            args.question, system_prompt=system_prompt, preamble=preamble, args=args,
+            args.question, system_prompt=system_prompt, preamble=preamble, gg=data_paths[0],
+            args=args,
             execute=lambda s: sandbox.run(s, data_paths=data_paths, extra_syspath=[site_dir]),
         )
     except Exception as exc:

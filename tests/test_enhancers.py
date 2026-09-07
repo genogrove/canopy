@@ -2,8 +2,6 @@
 """Host-side enhancer layer: target parsing, gene→TSS resolution, the ENHANCERS injection,
 and (when the index bundle is present) the tabix lookups. The generated query code can't read
 the index — the sandbox allowlist blocks file I/O — so these run host-side only."""
-import json
-
 import pytest
 
 from genogrove_canopy import llm
@@ -54,12 +52,21 @@ def test_resolve_gene():
     assert enhancers.resolve_gene("NOT_A_GENE") is None
 
 
-def test_preamble_roundtrips():
-    records = [{"chrom": "chr8", "start": "1", "class": "genic", "score_max": "0.9"}]
-    pre = enhancers.preamble(records)
-    assert pre.startswith("ENHANCERS = json.loads(")
-    loaded = eval(pre.split("=", 1)[1].strip(), {"json": json})  # json is on the sandbox allowlist
-    assert loaded == records
+def test_preamble_no_cohorts_opens_lazily():
+    pre = enhancers.preamble("/tmp/x.gg")
+    assert pre == ('import pygenogrove as pg\n'
+                    'GROVE = pg.GroveView.open("/tmp/x.gg")\nENHANCERS = []\n')
+    compile(pre, "<preamble>", "exec")
+
+
+def test_preamble_with_cohorts_attaches_each_onto_one_grove():
+    pre = enhancers.preamble(
+        "/tmp/x.gg", {"EFO:0005726": "/tmp/a.tsv", "EFO:0009318": "/tmp/b.tsv"})
+    assert 'GROVE = pg.Grove.deserialize("/tmp/x.gg")' in pre
+    assert 'attach_links(GROVE, "/tmp/a.tsv", "EFO:0005726")' in pre
+    assert 'attach_links(GROVE, "/tmp/b.tsv", "EFO:0009318")' in pre
+    assert "_CANOPY_STATE" in pre
+    compile(pre, "<preamble>", "exec")
 
 
 @pytest.mark.skipif(not enhancers.index_present(FLAGSHIP),

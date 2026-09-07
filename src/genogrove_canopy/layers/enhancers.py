@@ -30,6 +30,10 @@ from genogrove_canopy.layers._base import Layer
 # cohort absent from it made `fetch_for_targets` silently return nothing on every machine but the
 # one that built it. gene_tss ships in the package (small).
 INDEX_DIR = resources._CACHE / "re2g_index"
+# Derived, plain-text, one file per cohort — what the sandbox is granted and reads (it has no
+# `gzip`). Rebuilt from the pinned index in under a second, so it is disposable cache, not an
+# artifact: deleting it costs a rebuild, never correctness.
+LINKS_DIR = resources._CACHE / "re2g_links"
 # Package data lives in genogrove_canopy/data/; this module is in genogrove_canopy/layers/,
 # so go up one level.
 _GENE_TSS = Path(__file__).parent.parent / "data" / "gene_tss.tsv.gz"
@@ -106,53 +110,97 @@ def enhancers_in_region(chrom: str, start: int, end: int, cohort: str) -> list[d
     return _query(INDEX_DIR / f"{_slug(cohort)}.byEnhancer.tsv.gz", f"{chrom}:{start}-{end}", 0)
 
 
-def attach_to_grove(grove, records, attached=None) -> int:
-    """Augment a **mutable** GENCODE ``grove`` with ``records`` as first-class enhancer nodes +
-    a ``regulates``/``regulated_by`` edge pair to the target gene node — so the query code
-    traverses variant → enhancer → gene → (its exons / other enhancers) natively.
+def attach_links(grove, path, cohort):
+    """Attach one cohort's links to a **mutable** ``grove``, from the plain table at ``path``.
 
-    Enhancers are **spatially inserted** (``g.insert``, not ``add_external_key``) so a variant
-    ``intersect`` finds them alongside genes. The target gene node is located by ``intersect`` at
-    the enriched ``target_chrom``/``target_tss`` and matched on Ensembl id. ``attached`` is a
-    caller-owned set for **incremental** augmentation across a warm session — records already in
-    it are skipped (no reset needed); returns the number newly attached.
+    One **node per element** — an enhancer is one piece of DNA however many genes it regulates —
+    and one ``regulates`` edge per (element, gene), carrying the evidence::
 
-    This is the targeted replacement for ``resources.augment_grove``: only the enhancers a query
-    needs, onto an already-warm mutable grove — milliseconds, not a whole-cohort rebuild.
+        node  {"type": "enhancer", "source": "ENCODE-rE2G", "class": "promoter|genic|intergenic"}
+        edge  {"rel": "regulates", "byCohort": {<cohort>: {"score_max":.., "score_mean":.., "n_rep":..}}}
+
+    The score belongs to the *link*, not to the interval, which is why it sits on the edge. The
+    ``byCohort`` map is there because genogrove is a simple graph — one edge per node pair — so a
+    second cohort linking the same element to the same gene has to merge into the payload rather
+    than add a parallel edge. One direction is enough: "which enhancers regulate X" is
+    ``get_in_neighbors_if(gene, ...)`` — pygenogrove's reverse-neighbour call — so a stored
+    ``regulated_by`` back-edge would just be a second copy of the same fact.
+
+    Returns ``(elements, links, missed)``.
+
+    **This function is also shipped into the sandbox as source text** (see ``preamble``), so it
+    must stay self-contained: everything it needs is imported inside it or passed in — no module
+    globals, no helpers from this module. Keeping it a real function rather than a string literal
+    is what lets ``tests/test_enhancers.py`` exercise the exact code the sandbox runs.
     """
     import pygenogrove as pg
 
-    attached = attached if attached is not None else set()
-    gene_cache: dict = {}
-    n = 0
-    for r in records:
-        key = (r["cohort"], r["chrom"], r["start"], r["end"], r["target_gene"])
-        if key in attached:
-            continue
-        ens = r["ensembl_id"].split(".")[0]
-        gene = gene_cache.get(ens, False)
-        if gene is False:  # resolve the GENCODE gene node once per gene
-            gene = None
-            tc, tt = r.get("target_chrom"), r.get("target_tss")
-            if tc and tt:
-                for k in grove.intersect(pg.GenomicCoordinate("*", int(tt), int(tt)), tc):
+    genes, nodes, links, missed = {}, {}, 0, 0
+    with open(path) as fh:
+        for ln in fh:
+            chrom, start, end, cls, ens, tchrom, tss, n_rep, s_mean, s_max = \
+                ln.rstrip("\n").split("\t")
+            if ens not in genes:  # resolve the GENCODE gene once per gene, not per link
+                hit = None
+                # The table's TSS is 1-based (GFF); the grove is 0-based closed. Without the -1 a
+                # minus-strand gene's TSS is its *end* plus one — one base outside the gene — and
+                # every minus-strand target silently fails to resolve (110,403 of 225,229 links).
+                for k in grove.intersect(pg.GenomicCoordinate("*", int(tss) - 1, int(tss) - 1),
+                                         tchrom):
                     d = k.data
                     if d.get("type") == "gene" and (d.get("id") or "").split(".")[0] == ens:
-                        gene = k
+                        hit = k
                         break
-            gene_cache[ens] = gene
-        # BED half-open -> grove 0-based closed (end - 1); unstranded enhancer.
-        enh = grove.insert(r["chrom"], pg.GenomicCoordinate(".", int(r["start"]), int(r["end"]) - 1),
-                           {"type": "enhancer", "class": r["class"], "target": r["target_gene"],
-                            "score": float(r["score_max"]), "n_rep": int(r["n_rep"]),
-                            "cohort": r["cohort"]})
-        if gene is not None:
-            meta = {"cohort": r["cohort"], "score": float(r["score_max"]), "n_rep": int(r["n_rep"])}
-            grove.add_edge(enh, gene, {"rel": "regulates", **meta})
-            grove.add_edge(gene, enh, {"rel": "regulated_by", **meta})
-        attached.add(key)
-        n += 1
-    return n
+                genes[ens] = hit
+            gene = genes[ens]
+            if gene is None:  # target absent from this GENCODE build — count, never invent
+                missed += 1
+                continue
+            ek = (chrom, int(start), int(end) - 1)  # rE2G BED half-open -> grove 0-based closed
+            if ek not in nodes:
+                nodes[ek] = grove.insert(chrom, pg.GenomicCoordinate(".", ek[1], ek[2]),
+                                         {"type": "enhancer", "source": "ENCODE-rE2G",
+                                          "class": cls})
+            ev = {cohort: {"score_max": float(s_max), "score_mean": float(s_mean),
+                           "n_rep": int(n_rep)}}
+            grove.add_edge(nodes[ek], gene, {"rel": "regulates", "byCohort": ev})
+            grove.add_edge(gene, nodes[ek], {"rel": "regulated_by", "byCohort": ev})
+            links += 1
+    return len(nodes), links, missed
+
+
+def links_file(cohort: str) -> Path:
+    """The cohort's links as a plain TSV the sandbox can read, building it once if needed.
+
+    Plain text, not the bgzip index itself, because the sandbox has no ``gzip`` — its allowlist is
+    compute-only and its ``open`` is read-only and restricted to the roots the host grants. So the
+    host decompresses the pinned index once per cohort (~0.6 s, ~18 MB) and grants that file.
+
+    Columns are exactly what ``attach_links`` reads, in order: chrom, start, end, class, ensembl
+    (unversioned), target chrom, target TSS, n_rep, score_mean, score_max. Rows whose target is
+    absent from the gene table are dropped here rather than in the sandbox — resolving them there
+    would fail anyway, and the host is where a count can be reported.
+    """
+    dest = LINKS_DIR / f"{_slug(cohort)}.links.tsv"
+    if dest.exists():
+        return dest
+    if not ensure_index(cohort):
+        raise KeyError(f"{cohort!r} is not in the pinned rE2G index bundle")
+    by_ens, _ = _gene_tss()
+    src = INDEX_DIR / f"{_slug(cohort)}.byEnhancer.tsv.gz"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".tmp")
+    with gzip.open(src, "rt") as fh, tmp.open("w") as out:
+        for ln in fh:
+            r = dict(zip(_FIELDS, ln.rstrip("\n").split("\t")))
+            loc = by_ens.get(r["ensembl_id"].split(".")[0])
+            if loc is None:
+                continue
+            out.write("\t".join((r["chrom"], r["start"], r["end"], r["class"],
+                                 r["ensembl_id"].split(".")[0], loc[0], str(loc[1]),
+                                 r["n_rep"], r["score_mean"], r["score_max"])) + "\n")
+    tmp.replace(dest)  # atomic: a half-written table must never look cached
+    return dest
 
 
 def fetch_for_targets(targets, cohorts) -> list[dict]:
@@ -190,14 +238,52 @@ def fetch_for_targets(targets, cohorts) -> list[dict]:
     return out
 
 
-def preamble(records) -> str:
-    """The sandbox preamble line that injects ``records`` as the ``ENHANCERS`` variable.
+def preamble(gg: str, cohort_links: dict[str, str] | None = None) -> str:
+    """The sandbox preamble that binds ``GROVE`` to an open, ready-to-query handle.
 
-    Emitted as ``json.loads(<literal>)`` (``json`` is on the sandbox allowlist) so booleans/nulls
-    round-trip safely rather than relying on JSON literals being valid Python."""
+    Without cohorts that is ``pg.GroveView.open(gg)`` — lazy, ~200 ms, exactly what a
+    non-regulatory question paid before. With ``cohort_links`` (cohort id -> its links file path,
+    see ``links_file``), the grove is deserialized **mutable** and each cohort's links are attached
+    in the sandbox in turn (~6 s, ~1.8 GB for the first; an element linking to the same gene in two
+    cohorts merges its ``byCohort`` payload onto one edge rather than duplicating — see
+    ``attach_links``), because that is the only place the generated code can reach them: an
+    in-memory grove cannot cross the process boundary, and the records cannot be injected as a
+    literal (~34 MB of program text for one cohort alone).
+
+    The build is memoised in ``_CANOPY_STATE``, which survives between queries in a warm worker,
+    so an interactive session pays it once. The key is the grove path *and* the full set of
+    (cohort, links) pairs, since a stale grove here is a silently wrong answer. Only one entry is
+    kept: a different cohort selection evicts and rebuilds.
+
+    ``ENHANCERS`` is still defined, and always empty. Generated code from an older prompt that
+    loops over it gets nothing rather than a ``NameError``; the enhancers are in the grove now.
+    """
     import json
 
-    return f"ENHANCERS = json.loads({json.dumps(json.dumps(records))})\n"
+    if not cohort_links:
+        return f"import pygenogrove as pg\nGROVE = pg.GroveView.open({json.dumps(gg)})\nENHANCERS = []\n"
+
+    import inspect
+
+    attach_calls = "".join(
+        f"    attach_links(GROVE, {json.dumps(links)}, {json.dumps(cohort)})\n"
+        for cohort, links in cohort_links.items()
+    )
+    return (
+        "import pygenogrove as pg\n"
+        f"{inspect.getsource(attach_links)}\n"
+        f"_key = ({json.dumps(gg)}, tuple(sorted({json.dumps(cohort_links)}.items())))\n"
+        "_state = globals().get('_CANOPY_STATE')\n"       # absent in one-shot `sandbox.run`
+        "if _state is not None and _state.get('key') == _key:\n"
+        "    GROVE = _state['grove']\n"
+        "else:\n"
+        f"    GROVE = pg.Grove.deserialize({json.dumps(gg)})\n"
+        f"{attach_calls}"
+        "    if _state is not None:\n"
+        "        _state.clear()\n"                        # one grove at a time; see the docstring
+        "        _state.update(key=_key, grove=GROVE)\n"
+        "ENHANCERS = []\n"
+    )
 
 
 def _index_files(cohort: str) -> list[str]:
@@ -242,9 +328,12 @@ LAYER = Layer(
     kind="edge",
     title="ENCODE-rE2G enhancer→gene links",
     when="a question is about enhancers, gene regulation, which enhancers regulate a gene, or "
-         "whether a variant falls in an enhancer — optionally scoped to a biosample/cohort",
-    schema='enhancer node `{"type":"enhancer", "class":.., "target":.., "score":.., "cohort":..}` '
-           'plus a `{"rel":"regulates"}` / `{"rel":"regulated_by"}` edge pair to the GENCODE gene '
-           '(each carrying `cohort`/`score`/`n_rep`)',
-    attach=attach_to_grove,
+         "whether a variant falls in an enhancer — scoped to a biosample/cohort",
+    schema='enhancer node `{"type":"enhancer", "source":"ENCODE-rE2G", '
+           '"class":<promoter|genic|intergenic>}` — filter on `source`; the target gene is one '
+           '`get_neighbors` hop over the `{"rel":"regulates"}` edge (reverse: `regulated_by`), '
+           'whose payload is `{"byCohort": {<cohort>: {"score_max":.., "score_mean":.., '
+           '"n_rep":..}}}`. The score is on the **edge**, not the node — it is a property of the '
+           'link, and one element may regulate several genes with different scores',
+    attach=attach_links,
 )
