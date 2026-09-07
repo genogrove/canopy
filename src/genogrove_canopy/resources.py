@@ -147,7 +147,7 @@ RESOURCES: dict[str, Resource] = {
         filename="gencode.v50.annotation.sorted.gff3.gz",
         index_url="https://zenodo.org/api/records/21123308/files/gencode.v50.annotation.sorted.gff3.gz.tbi/content",
         index_sha256="52020642c93f01c24488d98b446d705a655d31ea39339fad36cced3b9cc9480a",
-        # Prebuilt **unified** grove (90 MB): the GENCODE backbone — indexed types are exactly
+        # Prebuilt **unified** grove (105 MB): the GENCODE backbone — indexed types are exactly
         # `{gene, regulatory_region}`, verified directly (transcript is EXTERNAL, like exon:
         # reach one via its gene's `contains` edge, never via intersect(); coding-structure
         # annotations, including the selenocysteine-readthrough analogue of `stop_codon`, are
@@ -157,7 +157,14 @@ RESOURCES: dict[str, Resource] = {
         # demand, per session, into an already-deserialized working copy instead (verified safe:
         # inserting into a deserialized grove does not corrupt it). 2,427,587 indexed keys /
         # 4,204,002 keys total (indexed + external), built in one pass via `gff.load_gff` +
-        # `layers.ccres.attach` under pygenogrove 0.7.4.
+        # `layers.ccres.attach`.
+        #
+        # Rebuilt (content unchanged, only the on-disk format changed) under the actually-pinned
+        # pygenogrove 0.9.0 — the previous pin was built under a stale local 0.7.4 install despite
+        # pyproject.toml already naming 0.9.0, so it silently shipped an old serialization format
+        # (0.2) that 0.9.0's `GroveView.open`/`Grove.deserialize` reject outright ("bad magic (not
+        # a format 0.3 grove stream)"). Round-tripped and EGFR-region smoke-checked against the new
+        # build before re-pinning.
         #
         # Because the layer ships inside the grove, nothing resolves `encode.ccre.v4` at query time
         # and there is no local bake — the old deserialize→insert→reserialize step (and the
@@ -165,13 +172,13 @@ RESOURCES: dict[str, Resource] = {
         #
         # The URL pins an immutable HF **commit**, not `resolve/main`: a branch ref is movable and
         # would defeat the Level 2 guarantee. Verified end-to-end through `_download` (302 → 200,
-        # 89,967,629 bytes, sha256 match).
+        # 104,994,275 bytes, sha256 match).
         grove_url=(
             "https://huggingface.co/datasets/genogrove/canopy/resolve/"
-            "5c47379d58c148022018a69c21ab9e3cda20335b"
+            "826d9f99599b25a81f70b30f592d8ba89d3d0c20"
             "/groves/gencode.v50+ccre.v4.grove-model.gg"
         ),
-        grove_sha256="dc1398bdb5482c5499aab6ea2bd866788002c3183c6cdc00c8471aba7e9f46ec",
+        grove_sha256="1b3d12b23c8d218ed2c83c38f3ba1e5c7dbad2cbd1d668874e6c4725b0ed51a9",
         grove_layers=("ENCODE cCRE registry (V4, GRCh38)",),
         grove_contents="GENCODE human v50 + ENCODE cCREs V4",
         description="GENCODE v50 comprehensive gene annotation, GRCh38 (GFF3, sorted + bgzip + tabix).",
@@ -400,7 +407,7 @@ def _all_grove_gg(name: str) -> Path:
 def ensure_all_grove(name: str) -> Path:
     """Cache the whole-genome grove (`.gg`) if absent, returning its path.
 
-    Prefers the **pinned prebuilt grove** (``grove_url``): a ~90 MB sha-verified download
+    Prefers the **pinned prebuilt grove** (``grove_url``): a ~105 MB sha-verified download
     (seconds) instead of a local build. Falls back to building from the annotation
     (``build_grove(region="")`` → serialize) — minutes, and only when the resource declares no
     ``grove_layers``, because a local build reads only the annotation and cannot reproduce them.

@@ -48,7 +48,7 @@ $ env CMAKE_PREFIX_PATH=/opt/homebrew \
       CMAKE_ARGS="-DCMAKE_PREFIX_PATH=/opt/homebrew/opt/htslib" uv sync
 ```
 
-Then fetch the data once (a pinned ~90 MB grove) so the first question is instant:
+Then fetch the data once (a pinned ~105 MB grove) so the first question is instant:
 
 ```console
 $ uv run canopy --init
