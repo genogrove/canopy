@@ -120,11 +120,11 @@ def attach_links(grove, path, cohort):
         edge  {"rel": "regulates", "byCohort": {<cohort>: {"score_max":.., "score_mean":.., "n_rep":..}}}
 
     The score belongs to the *link*, not to the interval, which is why it sits on the edge. The
-    ``byCohort`` map is there because genogrove is a simple graph — one edge per node pair — so a
-    second cohort linking the same element to the same gene has to merge into the payload rather
-    than add a parallel edge. One direction is enough: "which enhancers regulate X" is
-    ``get_in_neighbors_if(gene, ...)`` — pygenogrove's reverse-neighbour call — so a stored
-    ``regulated_by`` back-edge would just be a second copy of the same fact.
+    ``byCohort`` map is what makes a second cohort's call **merge** onto the same node and edge
+    pair instead of adding a parallel node/edge: pygenogrove happily stores two edges between one
+    pair, so the merge is done here — reuse the element node already at that interval, and fold
+    the new cohort into the existing edge's map. ``regulated_by`` is stored as well so
+    "its enhancers" from a gene is one plain ``get_neighbors_if`` hop.
 
     Returns ``(elements, links, missed)``.
 
@@ -157,14 +157,27 @@ def attach_links(grove, path, cohort):
                 missed += 1
                 continue
             ek = (chrom, int(start), int(end) - 1)  # rE2G BED half-open -> grove 0-based closed
-            if ek not in nodes:
-                nodes[ek] = grove.insert(chrom, pg.GenomicCoordinate(".", ek[1], ek[2]),
-                                         {"type": "enhancer", "source": "ENCODE-rE2G",
-                                          "class": cls})
-            ev = {cohort: {"score_max": float(s_max), "score_mean": float(s_mean),
-                           "n_rep": int(n_rep)}}
-            grove.add_edge(nodes[ek], gene, {"rel": "regulates", "byCohort": ev})
-            grove.add_edge(gene, nodes[ek], {"rel": "regulated_by", "byCohort": ev})
+            if ek not in nodes:  # one node per element — also across calls: a previous cohort
+                nodes[ek] = next(  # may already have inserted this exact interval
+                    (k for k in grove.intersect(pg.GenomicCoordinate("*", ek[1], ek[2]), chrom)
+                     if k.data.get("source") == "ENCODE-rE2G"
+                     and (k.value.start, k.value.end) == ek[1:]),
+                    None,
+                ) or grove.insert(chrom, pg.GenomicCoordinate(".", ek[1], ek[2]),
+                                  {"type": "enhancer", "source": "ENCODE-rE2G", "class": cls})
+            node = nodes[ek]
+            # Edge payloads come back as copies, so a link already present from another cohort
+            # is merged by removing the pair and re-adding it with the union of `byCohort`.
+            by = next((m["byCohort"] for t, m in grove.get_edge_list(node)
+                       if m and m.get("rel") == "regulates"
+                       and t.data.get("id") == gene.data.get("id")), None)
+            if by is not None:
+                grove.remove_edge(node, gene)
+                grove.remove_edge(gene, node)
+            by = {**(by or {}), cohort: {"score_max": float(s_max), "score_mean": float(s_mean),
+                                         "n_rep": int(n_rep)}}
+            grove.add_edge(node, gene, {"rel": "regulates", "byCohort": by})
+            grove.add_edge(gene, node, {"rel": "regulated_by", "byCohort": by})
             links += 1
     return len(nodes), links, missed
 

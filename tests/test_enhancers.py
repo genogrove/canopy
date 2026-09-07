@@ -102,3 +102,31 @@ def test_index_present_requires_every_file_not_just_the_tables(tmp_path, monkeyp
     for name in names:
         (tmp_path / name).write_bytes(b"")
     assert enhancers.index_present("EFO:0005726")
+
+
+def test_attach_links_merges_a_second_cohort_onto_one_node_and_edge(tmp_path):
+    """The same element→gene link in two cohorts is one enhancer node and one `regulates` edge
+    whose `byCohort` carries both — not a second node at the same interval with a parallel edge,
+    which is what two plain `add_edge` calls (and a per-call node cache) produced."""
+    pg = pytest.importorskip("pygenogrove")
+
+    g = pg.Grove(order=100)
+    g.insert("chr1", pg.GenomicCoordinate("+", 999, 1999), {"type": "gene", "id": "ENSG1.2"})
+    a, b = tmp_path / "a.tsv", tmp_path / "b.tsv"
+    a.write_text("chr1\t100\t200\tintergenic\tENSG1\tchr1\t1000\t1\t0.5\t0.9\n")
+    b.write_text("chr1\t100\t200\tintergenic\tENSG1\tchr1\t1000\t2\t0.4\t0.7\n"
+                 "chr1\t300\t400\tintergenic\tENSG1\tchr1\t1000\t1\t0.1\t0.2\n")
+    assert enhancers.attach_links(g, a, "C1") == (1, 1, 0)
+    assert enhancers.attach_links(g, b, "C2") == (2, 2, 0)
+
+    gene = next(k for k in g.intersect(pg.GenomicCoordinate("*", 1500, 1500), "chr1"))
+    enh = [k for k in g.intersect(pg.GenomicCoordinate("*", 150, 150), "chr1")
+           if k.data.get("type") == "enhancer"]
+    assert len(enh) == 1
+    edges = [m for _, m in g.get_edge_list(enh[0])]
+    assert edges == [{"rel": "regulates", "byCohort": {
+        "C1": {"score_max": 0.9, "score_mean": 0.5, "n_rep": 1},
+        "C2": {"score_max": 0.7, "score_mean": 0.4, "n_rep": 2}}}]
+    back = [m for t, m in g.get_edge_list(gene) if t.value.start == 100]
+    assert len(back) == 1 and back[0]["byCohort"].keys() == {"C1", "C2"}
+    assert len(g.get_neighbors_if(gene, lambda m: m and m.get("rel") == "regulated_by")) == 2
