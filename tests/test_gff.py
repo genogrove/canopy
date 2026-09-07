@@ -302,11 +302,15 @@ def test_exons_dedup_per_gene_and_chains_stay_separate(tmp_path) -> None:
             (999, 1099), (1999, 2099), (2999, 3099)]
         assert [(e.value.start, e.value.end) for e in w2] == [
             (1999, 2099), (2999, 3099)]
-        # t1/t2 share the middle exon (one key, gene G1) — the walks land on the identical key
-        assert w1[1] == w2[0]
+        # t1/t2 share the middle exon (one key, gene G1) — the walks land on the identical key.
+        # `is` (not `==`) proves it's the same node, not just an equal-valued one.
+        assert w1[1] is w2[0]
         assert w1[1].data["name"] == "AAA"
 
-        # t3 (gene G2) has an exon at the IDENTICAL interval — a different gene, a different key
+        # t3 (gene G2) has an exon at the IDENTICAL interval — a different gene, a different key.
+        # `Key` equality is value-based (pygenogrove#87): two keys with the same coordinates
+        # compare equal even when they're different graph nodes, so distinctness has to be
+        # checked with `is not` (object identity), not `!=`.
         assert [(e.value.start, e.value.end) for e in w3] == [(1999, 2099)]
-        assert w3[0] != w1[1]
+        assert w3[0] is not w1[1]
         assert w3[0].data["name"] == "BBB"                          # merged within, not across
