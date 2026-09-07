@@ -300,6 +300,10 @@ def preamble(gg: str, cohort_links: dict[str, str] | None = None) -> str:
         "    if _state is not None:\n"
         "        _state.clear()\n"                        # one grove at a time; see the docstring
         "        _state.update(key=_key, grove=GROVE)\n"
+        # Drop the host-only names from the namespace the generated code runs in, so one query
+        # cannot evict or swap the grove the next query in a warm session will be given.
+        "for _n in ('_CANOPY_STATE', '_state', '_key', '_n'):\n"
+        "    globals().pop(_n, None)\n"
         "ENHANCERS = []\n"
     )
 

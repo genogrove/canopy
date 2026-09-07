@@ -131,3 +131,19 @@ def test_attach_links_merges_a_second_cohort_onto_one_node_and_edge(tmp_path):
     back = [m for t, m in g.get_edge_list(gene) if t.value.start == 100]
     assert len(back) == 1 and back[0]["byCohort"].keys() == {"C1", "C2"}
     assert len(g.get_neighbors_if(gene, lambda m: m and m.get("rel") == "regulated_by")) == 2
+
+
+def test_preamble_hides_the_worker_state_from_generated_code():
+    """`_CANOPY_STATE` memoises the attached grove across queries in a warm worker. The preamble
+    reads it, then removes it (and its own scratch names) from the namespace, so generated code
+    cannot clear it or swap in a different grove for the next question."""
+    pre = enhancers.preamble("/tmp/x.gg", {"C": "/tmp/c.tsv"})
+    state = {}
+    ns = {"_CANOPY_STATE": state, "__builtins__": __builtins__}
+    # Neutralise the real work: no grove file exists here.
+    stub = "class pg:\n    class Grove:\n        deserialize = staticmethod(lambda p: 'G')\n"
+    body = pre.split("import pygenogrove as pg\n", 1)[1].replace("    attach_links(GROVE", "    (lambda *a: None)(GROVE")
+    exec(stub + body, ns)
+    assert state == {"key": ("/tmp/x.gg", (("C", "/tmp/c.tsv"),)), "grove": "G"}
+    assert not {"_CANOPY_STATE", "_state", "_key", "_n"} & ns.keys()
+    assert ns["GROVE"] == "G"
