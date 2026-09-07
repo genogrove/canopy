@@ -84,12 +84,22 @@ $ uv run canopy serve
 One grove, queried through one handle, holds three layers:
 
 - **Gene structure** — GENCODE v50: genes, transcripts and exons, with `contains` and
-  `first_exon`/`next` splice-chain edges, and CDS ranges on each exon.
+  `first_exon`/`next` splice-chain edges, and CDS ranges on each exon. Only genes are
+  in the spatial index; transcripts and exons are reached by walking those edges.
 - **Candidate regulatory elements** — the ENCODE cCRE registry (V4, 2,348,854 elements),
   typed as Sequence Ontology `regulatory_region` with the evidence-based class (`PLS`,
   `pELS`, `dELS`, …) in the payload. A single `intersect` returns genes *and* cCREs.
 - **Enhancer→gene links** — ENCODE-rE2G predictions across 369 biosamples. These are
-  cohort-specific, so they are resolved per question rather than shipped in the grove.
+  cohort-specific, so the declared cohort's links are attached into the grove per
+  question, as enhancer nodes with `regulates`/`regulated_by` edges carrying the score.
+
+A fourth layer is in the package but not yet reachable from a question:
+
+- **Structural variants** — a per-sample breakpoint graph (`layers/sv.py`): a sample's
+  SVs cut its chromosomes into segments anchored to the genes they overlap, with one
+  `breakpoint_edge` per SV. PCAWG consensus calls (ICGC + TCGA, open access, lifted to
+  GRCh38) are pinned as the source. Attaching a sample to the grove works and is tested;
+  selecting a sample from a question is not wired up yet.
 
 Enhancer answers carry a `ccre_overlap` list rather than a single class: most rE2G
 windows span several cCREs, and about a third span cCREs of differing classes, so
