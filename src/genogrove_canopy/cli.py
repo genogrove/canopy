@@ -37,7 +37,8 @@ DEFAULT_COHORT = "EFO:0005726"  # LNCaP clone FGC (prostate cancer) — the flag
 #: method the build lacks is the failure that matters — generated code raises ``AttributeError``
 #: inside the sandbox and the user sees a broken answer, not a build error. It has happened in both
 #: directions: 457feaa removed ``get_edge_list`` as absent, and it is present on 0.7.4.
-QUERY_SURFACE = ("intersect", "flanking", "get_neighbors", "get_edges", "get_neighbors_if")
+QUERY_SURFACE = ("intersect", "flanking", "get_neighbors", "get_edges", "get_edge_list",
+                 "get_neighbors_if")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -126,23 +127,23 @@ def _grove_context():
 
     The grove is the GENCODE backbone with the **Tier-1 static layers already in it** — currently
     the ENCODE cCRE registry, built into the pinned artifact rather than baked on first run (see
-    ``resources.ensure_all_grove``). So a `intersect`
-    returns genes *and* cCREs from one handle, ``GENCODE_HUMAN``, opened lazily. The enhancer layer
-    is **not** in the grove (it is dynamic/cohort-specific): the host resolves the model's declared
-    ``COHORT``/``TARGETS`` through the tabix index and injects only the needed enhancers as the
-    ``ENHANCERS`` variable (defaulted to ``[]`` in the preamble so the code never ``NameError``s).
+    ``resources.ensure_all_grove``). The preamble binds ``GROVE`` to an open ``GroveView`` of it,
+    so one `intersect` returns genes *and* cCREs. The enhancer layer is **not** in the artifact
+    (it is cohort-specific): when the model declares ``COHORT``/``TARGETS``, ``_answer`` appends
+    ``enhancers.preamble(gg, cohort_links)``, which rebinds ``GROVE`` to a mutable copy with that
+    cohort's nodes and edges attached — same name, so generated code never opens a path itself.
     """
     from genogrove_canopy import layers
+    from genogrove_canopy.layers import enhancers
 
-    var = "GENCODE_HUMAN"
     gg = str(resources.ensure_all_grove(_BASE))
     block = resources_block(
-        var, resources.RESOURCES[_BASE].description, layers.catalogue_block(["ccre"])
+        "GROVE", resources.RESOURCES[_BASE].description,
+        layers.catalogue_block(["ccre", "enhancers"]),
     )
-    preamble = f"{var} = {json.dumps(gg)}\nENHANCERS = []\n"
     # The sandbox reads only these roots. `LINKS_DIR` is where `enhancers.preamble`'s
     # `attach_links` opens a cohort's links table, so it must be granted alongside the grove.
-    return block, preamble, [gg, str(layers.enhancers.LINKS_DIR)]
+    return block, enhancers.preamble(gg), [gg, str(enhancers.LINKS_DIR)]
 
 
 def resources_block(var: str, description: str, layers_block: str) -> str:
@@ -154,16 +155,16 @@ def resources_block(var: str, description: str, layers_block: str) -> str:
     block is checking the real contract, not that a token exists somewhere in a source file.
     """
     return (
-        f"- `{var}` (str): path to the shipped grove "
-        f"({description}) — gene/transcript/exon structure **plus the "
-        f"ENCODE cCRE nodes, in the same grove**. Open it lazily with `g = pg.GroveView.open({var})`. A "
-        f"**located** query (a variant at chr7:55191822) reads just that locus; a **genome-wide / "
-        f"gene-name** query works from the same handle. Query-only: "
-        f"{', '.join(f'`{m}`' for m in QUERY_SURFACE)}.\n"
-        f"  Node layers in the grove — returned by `intersect` alongside genes, filter on `type`:\n"
-        f"  {layers_block}\n"
-        f"- `ENHANCERS` (list): the ENCODE-rE2G enhancer→gene links for the `COHORT`/`TARGETS` you "
-        f"declare (see \"Enhancers\"). Empty `[]` unless the question is about enhancers/regulation."
+        f"- `{var}`: an **open** grove handle ({description}) — gene/transcript/exon structure "
+        f"**plus the ENCODE cCRE nodes**, and, when you declare `COHORT`/`TARGETS` (see "
+        f"\"Enhancers\"), that cohort's rE2G enhancer nodes and edges, attached by the host before "
+        f"your code runs. Query `{var}` directly. **Never open a path yourself** — a handle you "
+        f"open lacks the attached layer. A **located** query (a variant at chr7:55191822) reads "
+        f"just that locus; a **genome-wide / gene-name** query works from the same handle. "
+        f"Query-only: {', '.join(f'`{m}`' for m in QUERY_SURFACE)}.\n"
+        f"  Layers in the grove — nodes come back from `intersect` alongside genes, filter on "
+        f"`source`/`type`:\n"
+        f"  {layers_block.replace(chr(10), chr(10) + '  ')}\n"
     )
 
 

@@ -13,7 +13,7 @@ def test_build_system_prompt_injects_resources_block():
     assert "GENCODE_HUMAN" in prompt
     assert "## The GENCODE Grove model" in prompt  # earlier sections preserved
     assert "TODO: injected at runtime" not in prompt  # placeholder dropped
-    assert prompt.index("GENCODE Grove model") < prompt.index("Available resources")
+    assert prompt.index("## The GENCODE Grove model") < prompt.index("## Available resources")
 
 
 _REC = '{"chrom": "chr7", "start": 100, "end": 200, "name": "EGFR", "strand": "+"}'

@@ -39,8 +39,8 @@ class _Grove:
     """The plain-GENCODE grove made runnable: system prompt, code preamble, and warm worker.
 
     Cohort-independent now — the grove is GENCODE structure only, so there's exactly one, built
-    once and reused across questions. Enhancers are resolved per question and injected as
-    ``ENHANCERS`` (see :func:`_pipeline`), not baked into the grove.
+    once and reused across questions. Enhancers are resolved per question and
+    attached into ``GROVE`` per question (see :func:`_pipeline`), not baked into the grove.
     """
 
     def __init__(self, model: str) -> None:
