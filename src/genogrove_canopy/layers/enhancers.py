@@ -17,6 +17,7 @@ Indexes (built by tools, one pair per cohort, in ``INDEX_DIR``):
 from __future__ import annotations
 
 import gzip
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -155,7 +156,7 @@ def links_file(cohort: str) -> Path:
     by_ens, _ = _gene_tss()
     src = INDEX_DIR / f"{_slug(cohort)}.byEnhancer.tsv.gz"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(".tmp")
+    tmp = dest.with_name(f"{dest.name}.{os.getpid()}.tmp")  # per process: no cross-process lock
     with gzip.open(src, "rt") as fh, tmp.open("w") as out:
         for ln in fh:
             r = dict(zip(_FIELDS, ln.rstrip("\n").split("\t")))
