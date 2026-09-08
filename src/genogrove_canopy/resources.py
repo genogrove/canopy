@@ -270,6 +270,17 @@ RESOURCES: dict[str, Resource] = {
         filename="final_consensus_sv_bedpe_passonly.tcga.public.tgz",
         description="PCAWG consensus SV calls (v1.6), TCGA portion, hg19 original (liftover input).",
     ),
+    # PCAWG sample sheet: aliquot id -> donor, ICGC project code (the SV cohort unit: 47 codes
+    # hold every SV sample). Build input for `tools/build_pcawg_cohorts.py`, which derives the
+    # packaged `data/pcawg_cohorts.tsv`; never read at query time. Same bucket, same pin rule.
+    "pcawg.sample_sheet": Resource(
+        name="pcawg.sample_sheet",
+        url="https://object.genomeinformatics.org/icgc25k-open/PCAWG/donors_and_biospecimens/"
+            "pcawg_sample_sheet.tsv",
+        sha256="0dc9871196e5c4587b2b562d94e1c62305adc2daf7f9439a7ad759f17bec7572",
+        filename="pcawg_sample_sheet.tsv",
+        description="PCAWG sample sheet (aliquot -> donor, specimen, ICGC project code).",
+    ),
 }
 
 
