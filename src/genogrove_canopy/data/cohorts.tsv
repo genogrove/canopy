@@ -1,0 +1,28 @@
+# One tissue/disease term per row, resolving to each layer's own key. Curated, not derived:
+# every rE2G/PCAWG pairing is a judgment (a cell line is not a tumour cohort) — see `note`.
+# aliases: `;`-separated words a question may use. re2g: ENCODE biosample ontology id (the
+# byCohort key). pcawg: `,`-separated ICGC project codes (the SV cohort unit). Empty = the
+# layer has nothing comparable; the question then loads that layer for nothing, and says so.
+term	aliases	re2g	pcawg	note
+breast	breast cancer;mammary	EFO:0001203	BRCA-US,BRCA-UK,BRCA-EU	MCF-7 (ER+ luminal line) vs mixed-subtype cohorts
+prostate	prostate cancer	EFO:0005726	PRAD-CA,PRAD-UK,PRAD-US,EOPC-DE	LNCaP (androgen-sensitive line); EOPC = early-onset
+liver	hepatocellular;hepatic;HCC	EFO:0001187	LIRI-JP,LIHC-US,LICA-FR,LINC-JP	HepG2 (hepatoblastoma-derived line)
+lung	lung cancer;pulmonary;NSCLC	EFO:0001086	LUAD-US,LUSC-US	A549 (adenocarcinoma line) also stands in for squamous LUSC
+colorectal	colon;colon cancer;rectal;bowel	EFO:0002824	COAD-US,READ-US	HCT116 (colon carcinoma line)
+pancreas	pancreatic cancer	EFO:0002713	PACA-AU,PACA-CA,PAEN-AU,PAEN-IT	Panc1 (ductal line, 1 replicate); PAEN = neuroendocrine, a different tumour
+leukemia	CML;AML;myeloid;blood cancer	EFO:0002067	LAML-KR,CMDI-UK	K562 is CML; LAML is AML and CMDI myelodysplasia — same lineage, different disease
+lymphoma	B-cell lymphoma;CLL;lymphoid;DLBCL	EFO:0005719	MALY-DE,DLBC-US,CLLE-ES	Karpas-422 (B-cell lymphoma line, 1 replicate)
+myeloma	multiple myeloma;plasma cell	EFO:0005724		MM.1S; PCAWG has no myeloma cohort
+cervix	cervical cancer	EFO:0002791	CESC-US	HeLa-S3 (cervical adenocarcinoma line)
+ovary	ovarian cancer	UBERON:0000992	OV-AU,OV-US	no ovarian cancer line in rE2G; normal ovary tissue
+stomach	gastric;gastric cancer	UBERON:0000945	GACA-CN,STAD-US	normal stomach tissue
+esophagus	esophageal;oesophageal	UBERON:0006920	ESAD-UK	esophagus squamous epithelium vs an adenocarcinoma cohort
+brain	glioma;glioblastoma;CNS;medulloblastoma	UBERON:0000955	GBM-US,LGG-US,PBCA-DE	normal brain tissue; PBCA = paediatric brain tumours
+kidney	renal;renal cancer;RCC	UBERON:0002113	KICH-US,KIRC-US,KIRP-US,RECA-EU	normal kidney tissue
+bladder	urothelial	UBERON:0001255	BLCA-US	normal urinary bladder tissue
+uterus	endometrial;endometrium	UBERON:0000995	UCEC-US	normal uterus tissue
+thyroid	thyroid cancer	UBERON:0002046	THCA-US	normal thyroid tissue
+skin	melanoma;cutaneous	CL:0000312	MELA-AU,SKCM-US	keratinocyte; melanoma arises from melanocytes, absent from rE2G
+bone	sarcoma;osteosarcoma;soft tissue		BOCA-UK,SARC-US	no bone/soft-tissue biosample in rE2G
+head and neck	oral;HNSCC;oral cancer		HNSC-US,ORCA-IN	no matching rE2G biosample
+biliary	bile duct;cholangiocarcinoma		BTCA-SG	no matching rE2G biosample
