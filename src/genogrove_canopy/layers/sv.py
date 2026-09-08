@@ -1,41 +1,33 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Structural-variant (SV) layer — breakpoint graph on the genomic axis.
+"""Structural-variant (SV) layer — breakpoint edges between backbone nodes.
 
 Source-agnostic: needs only breakpoint pairs (two coordinates + strand per SV, per
 sample). PCAWG consensus SV BEDPE is the validated example source, not the only one
 this works with — anything producing the same column shape (``_FIELDS`` below)
 attaches unmodified.
 
-Standard breakpoint-graph construction (matches real cancer genome-graph tools —
-JaBbA, remixt): take every breakpoint from every SV a sample has on a chromosome,
-sort them together, and cut the chromosome into ``sv_segment`` nodes at those
-positions — real intervals, per sample, ephemeral. Normal segment-to-segment
-adjacency is never stored (derivable from the segments' own coordinates — walked
-with ``flanking()`` at query time). One ``breakpoint_edge`` per SV connects the two
-segments its breakpoint pair defines — that edge *is* the SV. A segment with no
-``breakpoint_edge`` reaching it (a deleted middle, a lost chromothripsis fragment)
-still exists, just unreached in the derivative walk. An insertion
-(``svclass="INS"``) is the same edge between the two flanking segments, carrying
-``length``/``insertion_class``/``sequence`` instead of representing a second real
-reference position — no separate node, since nothing walks into or out of inserted
-material itself.
+A sample's SV is **one edge between the two places its breakends fall**, nothing else
+is created:
 
-Each segment is anchored to the shared backbone so a gene-first query can enter the
-graph: ``anchored_to`` (both directions) to the gene it overlaps, or — if none — to
-a 1Mb grid bin (``intergenic_region``, key = ``pos // _BIN``, plain arithmetic,
-never derived from gene positions, never a nearby-but-uninvolved gene).
+* a breakend inside a gene anchors to that gene node (every gene containing the
+  position, so a breakend in an overlapping gene pair — EGFR / EGFR-AS1 — reaches both);
+* a breakend outside every gene anchors to a 1 Mb ``intergenic_region`` bin for that
+  position (key = ``pos // _BIN``, plain arithmetic, never derived from gene positions,
+  never a nearby-but-uninvolved gene), created on demand and reused if present;
+* one ``breakpoint_edge`` per SV joins the two anchors, both directions, carrying the
+  exact positions and strands so nothing is lost by anchoring to a whole gene or bin.
+  An insertion (``svclass="INS"``) is the same edge carrying ``length`` /
+  ``insertion_class`` / ``sequence``.
 
-Complex rearrangements (chromoplexy, chromothripsis) need no special node type —
-they're this same construction with more breakpoints: a chromoplexy loop is a
-cycle of ``breakpoint_edge``s; a chromothriptic cluster is many piled into one
-region with several segments left unreached.
+So "what is now next to MYC in this sample" is one hop from the MYC node over
+``breakpoint_edge``; complex rearrangements (chromoplexy, chromothripsis) are just more
+edges — a chromoplexy loop is a cycle, a chromothriptic cluster is many edges piled into
+one region. Genes are never cut, and no derivative-chromosome structure is stored.
 
-Ephemeral, per sample: ``attach`` inserts directly into an already-deserialized
-grove — verified safe (5,000 inserts into the real 2.48M-node production backbone,
-0.02s, zero corruption to pre-existing lookups) — and ``detach`` removes exactly
-what one ``attach`` call added, so one warm backbone (``sandbox.py``'s
-``Worker``/``_CANOPY_STATE``) can be reused across many samples in a session
-without ever combining two samples' rearrangements in the same working copy.
+Ephemeral, per sample: ``attach_tracked`` inserts into an already-deserialized grove and
+returns exactly what it added (edges and any new bins); ``detach`` removes that and only
+that, so one warm backbone (``sandbox.py``'s ``Worker``/``_CANOPY_STATE``) is reused
+across samples without ever holding two samples' rearrangements at once.
 """
 
 from __future__ import annotations
@@ -50,7 +42,6 @@ from genogrove_canopy.layers._base import Layer
 _FIELDS = ("chrom1", "start1", "end1", "chrom2", "start2", "end2",
            "sv_id", "pe_support", "strand1", "strand2", "svclass", "svmethod")
 
-_SEG_TYPE = "sv_segment"
 _BIN = 1_000_000  # grid size for the intergenic anchor — see module docstring
 
 
@@ -67,9 +58,8 @@ def attach(grove, records) -> int:
     """Attach one sample's SVs to a **mutable**, already-deserialized ``grove`` —
     the ``Layer``-contract entry point (``(grove, records) -> int``, matching
     ``ccres``/``enhancers``). Each record must carry a ``"sample"`` key alongside
-    the ``_FIELDS`` above; all records passed in one call are one sample's
-    breakpoints, cut and segmented together per chromosome. Returns the number of
-    SVs attached.
+    the ``_FIELDS`` above; all records passed in one call are one sample's SVs.
+    Returns the number of SVs attached.
 
     Ephemeral by construction, but this entry point doesn't track what it created
     — use ``attach_tracked`` when the grove is a warm copy that will be reused for
@@ -84,117 +74,76 @@ def attach(grove, records) -> int:
 
 
 def attach_tracked(grove, records):
-    """Same as ``attach``, but also returns every ``(index, Key)`` pair created —
-    a sample's segments and whichever bin nodes were newly made to anchor them —
-    so ``detach`` can remove exactly what this call added, nothing shared with a
-    later sample.
+    """Same as ``attach``, but also returns every edge and bin it created — as
+    ``("edge", a, b)`` and ``("key", index, Key)`` entries — so ``detach`` can remove
+    exactly what this call added and nothing shared with a later sample.
     """
     import pygenogrove as pg
 
-    # A breakend at base `pos` (0-based) with strand "+" keeps that base — the cut is
-    # between pos and pos+1 — while "-" continues from `pos` onward, so its cut is between
-    # pos-1 and pos. A cut is recorded as the start of the segment to its right.
-    def cut(pos, strand):
-        return pos + 1 if strand == "+" else pos
-
-    positions_by_chrom: dict[str, set] = {}
-    for r in records:
-        positions_by_chrom.setdefault(r["chrom1"], set()).add(cut(int(r["start1"]), r["strand1"]))
-        positions_by_chrom.setdefault(r["chrom2"], set()).add(cut(int(r["start2"]), r["strand2"]))
-
-    # Segment starts per chromosome: a leading segment from 0 up to the first cut, then one
-    # per cut. Closed coordinates, so each ends one base before the next start. The trailing
-    # segment is a stub, `[last_cut, last_cut + 1]`.
-    # ponytail: stub instead of the real chromosome end; ship GRCh38 lengths if a walk ever
-    # needs the true telomeric extent.
-    starts_by_chrom = {c: (cuts if cuts[0] == 0 else [0] + cuts)
-                       for c, cuts in ((c, sorted(p)) for c, p in positions_by_chrom.items())}
-
     created = []
-    seg_by_chrom_pos: dict[tuple, object] = {}  # (chrom, seg_start) -> segment Key
-    bins: dict[tuple, object] = {}              # (chrom, bin_start) -> bin Key, this call's own
+    bins: dict[tuple, object] = {}  # (chrom, bin_start) -> bin Key, this call's own
     sample = records[0]["sample"] if records else None
 
-    def anchor(chrom, seg_start, seg_end, seg_key):
-        gene = next(
-            (k for k in grove.intersect(pg.GenomicCoordinate("*", seg_start, seg_end), chrom)
-             if k.data.get("type") == "gene"),
-            None,
-        )
-        target = gene
-        if target is None:
-            bin_start = (seg_start // _BIN) * _BIN
-            bin_key = (chrom, bin_start)
-            target = bins.get(bin_key)
-            if target is None:
-                target = next(
-                    (k for k in grove.intersect(
-                        pg.GenomicCoordinate("*", bin_start, bin_start), chrom)
-                     if k.data.get("type") == "intergenic_region"
-                     and k.value.start == bin_start),
-                    None,
-                )
-            if target is None:
-                target = grove.insert(
-                    chrom, pg.GenomicCoordinate(".", bin_start, bin_start + _BIN - 1),
-                    {"type": "intergenic_region"},
-                )
-                created.append((chrom, target))
-            bins[bin_key] = target
-        grove.add_edge(target, seg_key, {"rel": "anchored_to"})
-        grove.add_edge(seg_key, target, {"rel": "anchored_to"})
+    def anchors(chrom, pos):
+        at = pg.GenomicCoordinate("*", pos, pos)
+        genes = [k for k in grove.intersect(at, chrom) if k.data.get("type") == "gene"]
+        if genes:
+            return genes
+        bin_start = (pos // _BIN) * _BIN
+        key = bins.get((chrom, bin_start))
+        if key is None:  # one already there (an earlier sample's, or from another bin lookup)?
+            key = next((k for k in grove.intersect(at, chrom)
+                        if k.data.get("type") == "intergenic_region"
+                        and k.value.start == bin_start), None)
+        if key is None:
+            key = grove.insert(chrom, pg.GenomicCoordinate(".", bin_start, bin_start + _BIN - 1),
+                               {"type": "intergenic_region"})
+            created.append(("key", chrom, key))
+        bins[(chrom, bin_start)] = key
+        return [key]
 
-    def segment_for(chrom, pos, strand):
-        # A breakend's cut borders two segments — strand says which one: "+" continues
-        # via the segment ENDING at the cut (the one starting at the previous boundary),
-        # "-" via the segment STARTING there (standard breakend orientation).
-        starts = starts_by_chrom[chrom]
-        i = starts.index(cut(pos, strand))
-        if strand == "+" and i > 0:
-            return starts[i - 1]
-        return starts[i]
-
-    # Cut each chromosome into segments from ALL of this sample's breakpoints on
-    # it together (not per SV), anchoring each new segment as it's created.
-    for chrom, starts in starts_by_chrom.items():
-        ends = [nxt - 1 for nxt in starts[1:]] + [starts[-1] + 1]
-        for seg_start, seg_end in zip(starts, ends):
-            key = grove.insert(chrom, pg.GenomicCoordinate(".", seg_start, seg_end),
-                                {"type": _SEG_TYPE, "sample": sample})
-            created.append((chrom, key))
-            seg_by_chrom_pos[(chrom, seg_start)] = key
-            anchor(chrom, seg_start, seg_end, key)
-
-    # One breakpoint_edge per SV, connecting the exact two segments its own
-    # breakpoint pair defines. INS carries length/insertion_class/sequence instead
-    # of representing a second real reference position.
     n = 0
     for r in records:
-        s1 = segment_for(r["chrom1"], int(r["start1"]), r["strand1"])
-        s2 = segment_for(r["chrom2"], int(r["start2"]), r["strand2"])
-        seg1 = seg_by_chrom_pos[(r["chrom1"], s1)]
-        seg2 = seg_by_chrom_pos[(r["chrom2"], s2)]
         edge = {
             "rel": "breakpoint_edge", "svclass": r["svclass"], "sv_id": r["sv_id"],
-            "sample": sample, "orientation": f"{r['strand1']}/{r['strand2']}",
+            "sample": sample,
+            "chrom1": r["chrom1"], "pos1": int(r["start1"]), "strand1": r["strand1"],
+            "chrom2": r["chrom2"], "pos2": int(r["start2"]), "strand2": r["strand2"],
             "pe_support": int(r["pe_support"]), "svmethod": r["svmethod"],
         }
         if r["svclass"] == "INS":
             edge["length"] = r.get("length")
             edge["insertion_class"] = r.get("insertion_class")
             edge["sequence"] = r.get("sequence")  # None if the caller couldn't resolve it
-        grove.add_edge(seg1, seg2, edge)
-        grove.add_edge(seg2, seg1, edge)
+        for a in anchors(r["chrom1"], int(r["start1"])):
+            for b in anchors(r["chrom2"], int(r["start2"])):
+                grove.add_edge(a, b, edge)
+                if a is not b:  # both breakends in one gene/bin: one self-edge, not two
+                    grove.add_edge(b, a, edge)
+                created.append(("edge", a, b))
         n += 1
     return n, created
 
 
 def detach(grove, created) -> None:
-    """Remove exactly what one ``attach_tracked`` call added — the ``(index, Key)``
-    pairs it returned. Edges touching a key (both directions) are removed with it.
+    """Remove exactly what one ``attach_tracked`` call added: its breakpoint edges (both
+    directions), then any bin nodes it created. Gene nodes are never touched.
+
+    ponytail: ``remove_edge(a, b)`` drops the *first* edge between the pair, so this relies on
+    no other layer putting an edge between two anchors — true today (backbone edges are
+    gene→transcript→exon, enhancer edges are enhancer↔gene, bins have only ours). If a
+    gene↔gene layer ever lands, remove by predicate on ``sample`` instead.
     """
-    for index, key in created:
-        grove.remove_key(index, key)
+    for entry in created:
+        if entry[0] == "edge":
+            _, a, b = entry
+            grove.remove_edge(a, b)
+            if a is not b:
+                grove.remove_edge(b, a)
+    for entry in created:
+        if entry[0] == "key":
+            _, index, key = entry
+            grove.remove_key(index, key)
 
 
 LAYER = Layer(
@@ -205,13 +154,13 @@ LAYER = Layer(
     when="a question is about structural rearrangement, a specific patient/sample's "
          "genome structure, chromothripsis/chromoplexy, or whether a gene's regulatory "
          "context changed due to a rearrangement — scoped to one sample at a time",
-    schema='segment node `{"type":"sv_segment", "sample":..}` — a chromosome cut into '
-           'pieces at that sample\'s breakpoints, anchored to the backbone via '
-           '`{"rel":"anchored_to"}` (to the gene it overlaps, or a 1Mb '
-           '`{"type":"intergenic_region"}` bin otherwise). One '
-           '`{"rel":"breakpoint_edge", "svclass":<DEL|DUP|INV|TRA|INS>, "orientation":.., '
-           '"pe_support":.., "sv_id":..}` per SV connects the two segments it joins — walk '
-           'it to cross into whatever this sample\'s rearrangement now puts nearby. INS '
-           'carries `"length"`/`"insertion_class"`/`"sequence"` instead of a second segment',
+    schema='one `{"rel":"breakpoint_edge", "svclass":<DEL|DUP|INV|TRA|INS>, "sv_id":.., '
+           '"sample":.., "chrom1":.., "pos1":.., "strand1":.., "chrom2":.., "pos2":.., '
+           '"strand2":.., "pe_support":..}` edge per SV (both directions) between the two '
+           'backbone nodes its breakends fall in: the containing gene, or a 1 Mb '
+           '`{"type":"intergenic_region"}` bin when no gene contains the position. Walk it from '
+           'a gene to see what this sample\'s rearrangement now puts next to it; the exact '
+           'breakpoint positions are on the edge. INS carries `"length"`/`"insertion_class"`/'
+           '`"sequence"` too',
     attach=attach,
 )

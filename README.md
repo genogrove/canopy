@@ -95,11 +95,12 @@ One grove, queried through one handle, holds three layers:
 
 A fourth layer is in the package but not yet reachable from a question:
 
-- **Structural variants** — a per-sample breakpoint graph (`layers/sv.py`): a sample's
-  SVs cut its chromosomes into segments anchored to the genes they overlap, with one
-  `breakpoint_edge` per SV. PCAWG consensus calls (ICGC + TCGA, open access, lifted to
-  GRCh38) are pinned as the source. Attaching a sample to the grove works and is tested;
-  selecting a sample from a question is not wired up yet.
+- **Structural variants** — per-sample breakpoint edges (`layers/sv.py`): each SV is one
+  `breakpoint_edge` between the two backbone nodes its breakends fall in, the containing
+  gene or, outside every gene, a 1 Mb bin created on demand. Genes are never cut. PCAWG
+  consensus calls (ICGC + TCGA, open access, lifted to GRCh38) are pinned as the source.
+  Attaching a sample to the grove works and is tested; selecting a sample from a question
+  is not wired up yet.
 
 Enhancer answers carry a `ccre_overlap` list rather than a single class: most rE2G
 windows span several cCREs, and about a third span cCREs of differing classes, so
