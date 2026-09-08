@@ -488,13 +488,9 @@ def grove_view(name: str):
 # v4 = exons are external (graph-only) keys, not indexed in the B+ tree — reach one via its
 # transcript's first_exon/next chain, never via intersect().
 # v5 = transcripts are also external (reach via their gene's `contains` edge); only gene is
-# indexed among the GENCODE hierarchy. (v5 briefly also baked `intergenic_region` gap nodes
-# into the shared backbone for an SV layer's benefit — reverted: that coupled a universal,
-# shared artifact to one layer's need for no reason. The SV layer computes its own gap/bin
-# coverage on demand, per session, into an already-deserialized working copy instead — see
-# `layers/sv.py`. v6 below is the corrected rebuild with that reverted.)
-# v6 = same as v5's gene/transcript indexing, minus the baked-in intergenic_region nodes —
-# the pinned artifact carries no SV-layer-specific structure at all.
+# indexed among the GENCODE hierarchy.
+# v6 = v5 without the `intergenic_region` gap nodes it had briefly baked in for the SV layer;
+# the pinned artifact carries no layer-specific structure (see `layers/sv.py`).
 # v7 = `stop_codon_redefined_as_selenocysteine` (the selenocysteine-readthrough analogue of
 # `stop_codon`) is now dropped like every other coding-structure annotation, instead of falling
 # through to the generic foreign-layer path and getting indexed with its raw GENCODE attributes
@@ -853,9 +849,3 @@ def re2g_edges(accession: str, region: str = "") -> list[dict[str, str]]:
             lines = [ln for ln in fh.read().splitlines() if not ln.startswith("#")]
     return [{k: f[idx[k]] for k in _RE2G_KEEP}
             for f in (ln.split("\t") for ln in lines if ln)]
-
-
-# augment_grove / ensure_augmented_grove (combined-grove build) were superseded by the
-# host-side tabix index + attach_links (see genogrove_canopy.layers.enhancers) and removed —
-# the query path builds enhancer edges from re2g_index/ at query time, never from a
-# precomputed combined .gg.

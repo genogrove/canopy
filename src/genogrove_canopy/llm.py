@@ -47,11 +47,12 @@ def build_system_prompt(resources_block: str) -> str:
 def generate_query(question: str, system_prompt: str, *, model: str = DEFAULT_MODEL, on_usage=None):
     """Translate ``question`` into ``pygenogrove`` Python via Claude.
 
-    Returns ``(cohort, targets, code)``: ``cohort`` is the biosample/cell-line the model read
-    from the question (``""`` if none named; the host resolves it against the ENCODE catalog),
-    ``targets`` is the declared enhancer targets — ``{"gene": ...}`` / ``{"region": ...}`` the
-    host resolves to the ``ENHANCERS`` it injects before running ``code`` (empty for questions
-    with no regulatory layer). ``code`` is the generated Python. The caller runs it through the
+    Returns ``(cohort, targets, code)``: ``cohort`` is the biosample/cell-line(s) the model read
+    from the question (``""`` if none named; ``;``-separated if several; the host resolves it
+    against the ENCODE catalog and attaches those cohorts into the grove before running
+    ``code``), ``targets`` is the declared enhancer targets — ``{"gene": ...}`` /
+    ``{"region": ...}`` — whose presence marks the question as regulatory (empty otherwise).
+    ``code`` is the generated Python. The caller runs it through the
     sandbox; nothing is executed here. Raises ``RuntimeError`` if the model declines.
 
     ``on_usage``, if given, is called with the response's ``usage`` object before parsing — a

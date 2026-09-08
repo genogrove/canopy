@@ -47,7 +47,7 @@ def test_declarations_never_leak_into_code(text):
 def test_preamble_no_cohorts_opens_lazily():
     pre = enhancers.preamble("/tmp/x.gg")
     assert pre == ('import pygenogrove as pg\n'
-                    'GROVE = pg.GroveView.open("/tmp/x.gg")\nCOHORTS = []\nENHANCERS = []\n')
+                    'GROVE = pg.GroveView.open("/tmp/x.gg")\nCOHORTS = []\n')
     compile(pre, "<preamble>", "exec")
 
 

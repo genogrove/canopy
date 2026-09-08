@@ -189,15 +189,12 @@ def preamble(gg: str, cohort_links: dict[str, str] | None = None) -> str:
     filter on it; the prompt says so.
     ponytail: the grove only grows within a session — a few hundred MB per cohort, no eviction.
     Add an LRU over ``cohorts`` if sessions that wander across many tissues turn up.
-
-    ``ENHANCERS`` is still defined, and always empty. Generated code from an older prompt that
-    loops over it gets nothing rather than a ``NameError``; the enhancers are in the grove now.
     """
     import json
 
     if not cohort_links:
         return (f"import pygenogrove as pg\nGROVE = pg.GroveView.open({json.dumps(gg)})\n"
-                "COHORTS = []\nENHANCERS = []\n")
+                "COHORTS = []\n")
 
     import inspect
 
@@ -241,7 +238,6 @@ def preamble(gg: str, cohort_links: dict[str, str] | None = None) -> str:
         # (`sys.modules['__main__']` can still reach it — the sandbox's documented residual risk.)
         "for _n in ('_CANOPY_STATE', '_state', '_grove', '_c', '_links', '_readonly', '_n'):\n"
         "    globals().pop(_n, None)\n"
-        "ENHANCERS = []\n"
     )
 
 
