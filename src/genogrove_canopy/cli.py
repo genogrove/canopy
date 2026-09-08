@@ -161,7 +161,7 @@ def resources_block(var: str, description: str, layers_block: str) -> str:
         f"your code runs. Query `{var}` directly. **Never open a path yourself** — a handle you "
         f"open lacks the attached layer. A **located** query (a variant at chr7:55191822) reads "
         f"just that locus; a **genome-wide / gene-name** query works from the same handle. "
-        f"Query-only: {', '.join(f'`{m}`' for m in QUERY_SURFACE)}.\n"
+        f"Read-only — mutators raise; query with: {', '.join(f'`{m}`' for m in QUERY_SURFACE)}.\n"
         f"  Layers in the grove — nodes come back from `intersect` alongside genes, filter on "
         f"`source`/`type`:\n"
         f"  {layers_block.replace(chr(10), chr(10) + '  ')}\n"

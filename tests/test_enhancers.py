@@ -62,9 +62,10 @@ def test_preamble_no_cohorts_opens_lazily():
 def test_preamble_with_cohorts_attaches_each_onto_one_grove():
     pre = enhancers.preamble(
         "/tmp/x.gg", {"EFO:0005726": "/tmp/a.tsv", "EFO:0009318": "/tmp/b.tsv"})
-    assert 'GROVE = pg.Grove.deserialize("/tmp/x.gg")' in pre
-    assert 'attach_links(GROVE, "/tmp/a.tsv", "EFO:0005726", _nodes)' in pre
-    assert 'attach_links(GROVE, "/tmp/b.tsv", "EFO:0009318", _nodes)' in pre
+    assert '_grove = pg.Grove.deserialize("/tmp/x.gg")' in pre
+    assert 'attach_links(_grove, "/tmp/a.tsv", "EFO:0005726", _nodes)' in pre
+    assert 'attach_links(_grove, "/tmp/b.tsv", "EFO:0009318", _nodes)' in pre
+    assert "GROVE = _readonly(_grove)" in pre
     assert "_CANOPY_STATE" in pre
     compile(pre, "<preamble>", "exec")
 
@@ -133,17 +134,46 @@ def test_attach_links_merges_a_second_cohort_onto_one_node_and_edge(tmp_path):
     assert len(g.get_neighbors_if(gene, lambda m: m and m.get("rel") == "regulated_by")) == 2
 
 
-def test_preamble_hides_the_worker_state_from_generated_code():
+def test_preamble_hides_the_worker_state_and_hands_out_a_read_only_view():
     """`_CANOPY_STATE` memoises the attached grove across queries in a warm worker. The preamble
-    reads it, then removes it (and its own scratch names) from the namespace, so generated code
-    cannot clear it or swap in a different grove for the next question."""
+    reads it, drops the stale entry *before* deserializing the next grove (two live groves would
+    exceed the sandbox memory cap), removes its scratch names from the namespace, and binds
+    `GROVE` to a view that forwards query methods only — so generated code can neither swap the
+    memoised grove nor insert into it and change the next question's answer."""
     pre = enhancers.preamble("/tmp/x.gg", {"C": "/tmp/c.tsv"})
-    state = {}
-    ns = {"_CANOPY_STATE": state, "__builtins__": __builtins__}
-    # Neutralise the real work: no grove file exists here.
-    stub = "class pg:\n    class Grove:\n        deserialize = staticmethod(lambda p: 'G')\n"
-    body = pre.split("import pygenogrove as pg\n", 1)[1].replace("    attach_links(GROVE", "    (lambda *a: None)(GROVE")
-    exec(stub + body, ns)
-    assert state == {"key": ("/tmp/x.gg", (("C", "/tmp/c.tsv"),)), "grove": "G"}
-    assert not {"_CANOPY_STATE", "_state", "_key", "_n"} & ns.keys()
-    assert ns["GROVE"] == "G"
+
+    class _Grove:
+        def __init__(self):
+            self.n = 1
+        def size(self):
+            return self.n
+        def insert(self, *a):
+            self.n += 1
+        def __len__(self):
+            return self.n
+
+    class _GroveView:  # what the sandbox's read-only handle exposes
+        def size(self): ...
+    events = []
+
+    class _State(dict):
+        def clear(self):
+            events.append("clear")
+            super().clear()
+
+    pg = type("pg", (), {
+        "Grove": type("G", (), {"deserialize": staticmethod(
+            lambda p: events.append("deser") or _Grove())}),
+        "GroveView": _GroveView})
+    state = _State(key="stale", grove="OLD")
+    body = pre.split("import pygenogrove as pg\n", 1)[1].replace("    attach_links(_grove", "    (lambda *a: None)(_grove")
+    g = {"_CANOPY_STATE": state, "__builtins__": __builtins__, "pg": pg}
+    exec(body, g)
+    assert events[:2] == ["clear", "deser"]                  # stale entry dropped first
+    assert state["key"] == ("/tmp/x.gg", (("C", "/tmp/c.tsv"),)) and isinstance(state["grove"], _Grove)
+    assert not {"_CANOPY_STATE", "_state", "_key", "_grove", "_readonly", "_n"} & g.keys()
+    view = g["GROVE"]
+    assert view.size() == 1 and len(view) == 1               # reads forward
+    with pytest.raises(AttributeError):
+        view.insert("chr1", None, {})                        # mutators do not
+    assert state["grove"].size() == 1                        # ...so the memoised grove is untouched

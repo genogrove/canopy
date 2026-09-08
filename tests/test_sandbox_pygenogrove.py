@@ -79,3 +79,39 @@ def test_enhancer_preamble_attaches_links_inside_the_sandbox(tmp_path, monkeypat
 
     assert result.returncode == 0, result.stderr
     assert "enh 1 ENCODE-rE2G" in result.stdout
+
+
+def test_warm_worker_reuses_the_attached_grove_and_a_query_cannot_mutate_it(tmp_path):
+    """The path `serve` and `-i` always take: the cohort preamble runs twice in one `Worker`.
+    The second run must hit `_CANOPY_STATE` (no re-attach) and see exactly what the first saw —
+    even though the first query tried to insert into `GROVE`, which the read-only view refuses."""
+    from genogrove_canopy.layers import enhancers
+
+    gg = tmp_path / "mini.gg"
+    g = pg.Grove(order=100)
+    g.insert("chr1", pg.GenomicCoordinate("+", 999, 1999), {"type": "gene", "id": "ENSG1.2"})
+    g.serialize(str(gg))
+    links = tmp_path / "c.links.tsv"
+    links.write_text("chr1\t100\t200\tintergenic\tENSG1\tchr1\t1000\t1\t0.5\t0.9\n")
+    pre = "import json\n" + enhancers.preamble(str(gg), {"C": str(links)})
+    count = ("enh = [k for k in GROVE.intersect(pg.GenomicCoordinate('*', 0, 5000), 'chr1')"
+             " if k.data.get('type') == 'enhancer']\nprint('enh', len(enh))\n")
+
+    # The view hides the grove, but a bound method's `__self__` still names it — good enough to
+    # prove both runs used the same object, i.e. the second was a memo hit.
+    ident = "print('id', id(GROVE.intersect.__self__))\n"
+    w = sandbox.Worker(data_paths=[str(tmp_path)], extra_syspath=[_pygenogrove_site_dir()])
+    try:
+        first = w.submit(pre + count + ident
+                         + "try:\n    GROVE.insert('chr1', pg.GenomicCoordinate('.', 5, 6), {})\n"
+                         "except AttributeError as e:\n    print('refused', e)\n")
+        second = w.submit(pre + count + ident)
+    finally:
+        w.close()
+
+    assert first.returncode == 0, first.stderr
+    assert "enh 1" in first.stdout and "refused" in first.stdout
+    assert second.returncode == 0, second.stderr
+    assert "enh 1" in second.stdout                       # the refused insert left no trace
+    ids = [ln for ln in (first.stdout + second.stdout).splitlines() if ln.startswith("id ")]
+    assert len(ids) == 2 and ids[0] == ids[1]             # same grove object: memo hit

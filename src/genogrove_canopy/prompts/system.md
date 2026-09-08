@@ -40,6 +40,9 @@ uses the `pygenogrove` library, and nothing else, to compute the answer.
   row keeps its own `start`/`end`. Order **outside-in**: gene → transcript → exon/intron →
   enhancers. So the answer is one clean table, not `EGFR (gene) → transcript …, exon 20 of 26`.
 - Never mutate a coordinate after it has been inserted into a grove (see Coordinates).
+- **`GROVE` is read-only.** It is shared across the questions of a session, so `insert`, `add_edge`,
+  `remove_*`, `add_external_key` and the like are not available on it (they raise `AttributeError`)
+  — the mutating API below is for a scratch `pg.Grove()` you build yourself, never for `GROVE`.
 
 ## The `pygenogrove` API surface
 

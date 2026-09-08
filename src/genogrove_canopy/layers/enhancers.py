@@ -283,7 +283,7 @@ def preamble(gg: str, cohort_links: dict[str, str] | None = None) -> str:
     import inspect
 
     attach_calls = "".join(
-        f"    attach_links(GROVE, {json.dumps(links)}, {json.dumps(cohort)}, _nodes)\n"
+        f"    attach_links(_grove, {json.dumps(links)}, {json.dumps(cohort)}, _nodes)\n"
         for cohort, links in cohort_links.items()
     )
     return (
@@ -292,17 +292,38 @@ def preamble(gg: str, cohort_links: dict[str, str] | None = None) -> str:
         f"_key = ({json.dumps(gg)}, tuple(sorted({json.dumps(cohort_links)}.items())))\n"
         "_state = globals().get('_CANOPY_STATE')\n"       # absent in one-shot `sandbox.run`
         "if _state is not None and _state.get('key') == _key:\n"
-        "    GROVE = _state['grove']\n"
+        "    _grove = _state['grove']\n"
         "else:\n"
-        f"    GROVE = pg.Grove.deserialize({json.dumps(gg)})\n"
+        "    if _state is not None:\n"
+        "        _state.clear()\n"   # drop the stale grove BEFORE deserializing the next one:
+        # both live at once is ~1.8 GB + a ~2 GB deserialize peak against the 4 GiB sandbox cap
+        f"    _grove = pg.Grove.deserialize({json.dumps(gg)})\n"
         "    _nodes = {}\n"                                  # one element cache across cohorts
         f"{attach_calls}"
         "    if _state is not None:\n"
-        "        _state.clear()\n"                        # one grove at a time; see the docstring
-        "        _state.update(key=_key, grove=GROVE)\n"
-        # Drop the host-only names from the namespace the generated code runs in, so one query
-        # cannot evict or swap the grove the next query in a warm session will be given.
-        "for _n in ('_CANOPY_STATE', '_state', '_key', '_n'):\n"
+        "        _state.update(key=_key, grove=_grove)\n"
+        # The memoised grove is a mutable `Grove` shared by every query of the session. Hand the
+        # generated code a view that forwards only what a read-only `GroveView` has (plus the
+        # count/lookup helpers), so a query cannot insert into it and quietly change the next
+        # answer. A closure, not an attribute, so the raw grove isn't one `._g` away.
+        "def _readonly(g):\n"
+        "    _ok = {n for n in dir(pg.GroveView) if not n.startswith('_')} | {\n"
+        "        'size', 'edge_count', 'vertex_count', 'external_vertex_count',\n"
+        "        'indexed_vertex_count', 'vertex_count_with_edges', 'key_storage_size',\n"
+        "        'has_edge', 'graph_empty'}\n"
+        "    class _View:\n"
+        "        def __getattr__(self, n):\n"
+        "            if n in _ok:\n"
+        "                return getattr(g, n)\n"
+        "            raise AttributeError(f'GROVE is read-only: {n!r} is not a query method')\n"
+        "        def __len__(self):\n"
+        "            return len(g)\n"
+        "    return _View()\n"
+        "GROVE = _readonly(_grove)\n"
+        # Drop the host-only names from the namespace the generated code runs in, so a query
+        # won't by accident evict or swap the grove the next query in a warm session is given.
+        # (`sys.modules['__main__']` can still reach it — the sandbox's documented residual risk.)
+        "for _n in ('_CANOPY_STATE', '_state', '_key', '_grove', '_readonly', '_n'):\n"
         "    globals().pop(_n, None)\n"
         "ENHANCERS = []\n"
     )
