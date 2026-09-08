@@ -115,8 +115,12 @@ def attach_tracked(grove, records):
             edge["length"] = r.get("length")
             edge["insertion_class"] = r.get("insertion_class")
             edge["sequence"] = r.get("sequence")  # None if the caller couldn't resolve it
-        for a in anchors(r["chrom1"], int(r["start1"])):
-            for b in anchors(r["chrom2"], int(r["start2"])):
+        seen = set()  # unordered anchor pairs this SV already joined: both breakends inside
+        for a in anchors(r["chrom1"], int(r["start1"])):  # the same overlapping genes would
+            for b in anchors(r["chrom2"], int(r["start2"])):  # otherwise yield (A,B) and (B,A)
+                if frozenset((id(a), id(b))) in seen:
+                    continue
+                seen.add(frozenset((id(a), id(b))))
                 grove.add_edge(a, b, edge)
                 if a is not b:  # both breakends in one gene/bin: one self-edge, not two
                     grove.add_edge(b, a, edge)

@@ -60,6 +60,23 @@ def test_breakend_inside_overlapping_genes_anchors_to_each():
     assert len(created) == 2 and all(e[0] == "edge" for e in created)
 
 
+def test_both_breakends_in_one_overlapping_gene_pair_join_each_pair_once():
+    """Breakends at 2600 and 2900 both sit inside EGFR and EGFR-AS1: the anchors are the same
+    two genes on each side, so the naive product yields (A,B) and (B,A) and doubles every edge."""
+    g = pg.Grove(order=100)
+    g.insert("chr7", pg.GenomicCoordinate("+", 1000, 3000), {"type": "gene", "id": "EGFR"})
+    g.insert("chr7", pg.GenomicCoordinate("-", 2500, 3500), {"type": "gene", "id": "EGFR-AS1"})
+    before = g.edge_count()
+
+    _, created = sv.attach_tracked(g, [_sv("S1", "SV1", "chr7", 2600, "+", "chr7", 2900, "-", "DEL")])
+    egfr, as1 = _gene(g, "chr7", 1500), _gene(g, "chr7", 3400)
+    assert [t.data["id"] for t, _ in _bp_edges(g, egfr)] == ["EGFR", "EGFR-AS1"]     # self + one to AS1
+    assert [t.data["id"] for t, _ in _bp_edges(g, as1)] == ["EGFR", "EGFR-AS1"]      # the reverse + self
+    assert g.edge_count() == before + 4 and len(created) == 3                       # 2 selfs + 1 pair
+    sv.detach(g, created)
+    assert g.edge_count() == before
+
+
 def test_intergenic_breakend_creates_a_closed_1mb_bin():
     g = pg.Grove(order=100)
     g.insert("chr3", pg.GenomicCoordinate("+", 1000, 2000), {"type": "gene", "id": "C"})
