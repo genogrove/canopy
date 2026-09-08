@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Lift PCAWG's consensus SV BEDPE (hg19) to GRCh38 → two ready-to-pin tarballs.
 
-Build-time input, not resolved on a user's machine — same shape as `encode.ccre.v4`:
-the raw PCAWG tarballs (pinned as `pcawg.sv.icgc`/`pcawg.sv.tcga`, hg19) are the input;
-this script's *output* (lifted to GRCh38, matching the pinned GENCODE v50 backbone) is
-what actually gets re-hosted and pinned. No official hg38 PCAWG SV release exists, so
+Build-time step, not run on a user's machine — same shape as `encode.ccre.v4`: the raw
+PCAWG tarballs (pinned as `pcawg.sv.icgc.hg19` / `pcawg.sv.tcga.hg19`) are the input; this
+script's *output* (lifted to GRCh38, matching the pinned GENCODE v50 backbone) is what is
+re-hosted and pinned as `pcawg.sv.icgc` / `pcawg.sv.tcga`. No official hg38 PCAWG SV release exists, so
 re-hosting a derived artifact is the only way to get one — unlike per-sample hosting
 (tried and reverted elsewhere in this project's history), this is a real reason.
 
@@ -125,8 +125,8 @@ def main() -> None:
     lo = LiftOver(str(chain))
 
     for name in ("pcawg.sv.icgc", "pcawg.sv.tcga"):
-        src = resources.resolve(name)
-        stem = Path(resources.RESOURCES[name].filename).stem  # strips the trailing .tgz
+        src = resources.resolve(f"{name}.hg19")               # the pinned ORIGINAL, never the
+        stem = Path(resources.RESOURCES[name].filename).stem  # hg38 output this produces
         out = out_dir / f"{stem}.hg38.tgz"
         kept, dropped = lift_tarball(src, out, lo)
         digest = hashlib.sha256(out.read_bytes()).hexdigest()

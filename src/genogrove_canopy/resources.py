@@ -220,9 +220,9 @@ RESOURCES: dict[str, Resource] = {
         # (`icgc/open/<aliquot_id>.pcawg_consensus_1.6.161116.somatic.sv.bedpe.gz`), 1,926 samples.
         #
         # PCAWG's own release is hg19 only — no official hg38 SV release exists — so this is a
-        # *derived* artifact: lifted to GRCh38 by `tools/liftover_pcawg_sv.py` (build-time step,
-        # not resolved on a user's machine; same shape as `encode.ccre.v4`) and re-hosted, since
-        # there's no upstream hg38 original to pin against. 179,905/179,973 SVs lifted (0.04%
+        # *derived* artifact: lifted to GRCh38 by `tools/liftover_pcawg_sv.py` from the pinned
+        # `pcawg.sv.icgc.hg19` original (build-time step, not resolved on a user's machine; same
+        # shape as `encode.ccre.v4`) and re-hosted, since there's no upstream hg38 original. 179,905/179,973 SVs lifted (0.04%
         # dropped — didn't lift cleanly). Chrom columns normalized to "chr"-prefixed to match the
         # GENCODE backbone.
         url=(
@@ -248,6 +248,26 @@ RESOURCES: dict[str, Resource] = {
         filename="final_consensus_sv_bedpe_passonly.tcga.public.hg38.tgz",
         description="PCAWG consensus SV calls (v1.6), TCGA portion, 822 samples, open access, "
                     "lifted to GRCh38.",
+    ),
+    # The hg19 ORIGINALS the two entries above were lifted from — build inputs for
+    # `tools/liftover_pcawg_sv.py`, never read at query time. Hosted on the ICGC 25K open
+    # bucket (S3-compatible, public read); the URL carries no version, so immutability rests on
+    # the sha256 here: a changed upstream file fails verification instead of lifting silently.
+    "pcawg.sv.icgc.hg19": Resource(
+        name="pcawg.sv.icgc.hg19",
+        url="https://object.genomeinformatics.org/icgc25k-open/PCAWG/consensus_sv/"
+            "final_consensus_sv_bedpe_passonly.icgc.public.tgz",
+        sha256="8aff040b21a3680629a364e3cfc57f42a235cc8d8aa3e1a14245f5e2c9d01079",
+        filename="final_consensus_sv_bedpe_passonly.icgc.public.tgz",
+        description="PCAWG consensus SV calls (v1.6), ICGC portion, hg19 original (liftover input).",
+    ),
+    "pcawg.sv.tcga.hg19": Resource(
+        name="pcawg.sv.tcga.hg19",
+        url="https://object.genomeinformatics.org/icgc25k-open/PCAWG/consensus_sv/"
+            "final_consensus_sv_bedpe_passonly.tcga.public.tgz",
+        sha256="3be5502baa2726142137ac83c234623ca215fb356b8645c63933ee516e5c94f6",
+        filename="final_consensus_sv_bedpe_passonly.tcga.public.tgz",
+        description="PCAWG consensus SV calls (v1.6), TCGA portion, hg19 original (liftover input).",
     ),
 }
 
