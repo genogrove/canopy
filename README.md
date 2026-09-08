@@ -101,6 +101,12 @@ A fourth layer is in the package but not yet reachable from a question:
   consensus calls (ICGC + TCGA, open access, lifted to GRCh38) are pinned as the source.
   Attaching a sample to the grove works and is tested; selecting a sample from a question
   is not wired up yet.
+  Edges retain the original caller label as `source_svclass` and normalize inversion
+  subtypes to `svclass="INV"`. Those classes describe the original hg19 PCAWG call;
+  `junction_class` separately describes the GRCh38 junction geometry, which can differ
+  after liftover. Junction geometry does not establish copy-number change or diagnose
+  chromothripsis/chromoplexy. The pinned PCAWG calls contain no insertions, although the
+  attachment API supports insertion payloads.
 
 Enhancer answers carry a `ccre_overlap` list rather than a single class: most rE2G
 windows span several cCREs, and about a third span cCREs of differing classes, so

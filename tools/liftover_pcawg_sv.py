@@ -13,6 +13,12 @@ re-hosting a derived artifact is the only way to get one — unlike per-sample h
 Requires `pyliftover` (one-off tool dependency, not a package runtime dependency —
 run `pip install pyliftover` before invoking this script) and the UCSC hg19->hg38
 chain file (downloaded here, sha256-verified against a fixed pin).
+
+The BEDPE ``svclass`` column remains the original hg19 caller classification, even
+when a mapped breakend reverses. At attachment, layers/sv.py retains it explicitly as
+``source_svclass``, normalizes inversion subtypes in ``svclass``, and derives a separate
+``junction_class`` from the lifted coordinates and strands. A junction's orientation
+alone is not evidence for reclassifying the original biological event.
 """
 
 from __future__ import annotations
@@ -59,8 +65,8 @@ def _lift_one(lo, chrom: str, pos: int) -> tuple[int, bool] | None:
 
     ``reversed`` is True when the chain block is on the minus strand — the sequence is
     inverted between assemblies there, so a breakend's orientation flips with it. 778 of
-    309,120 PCAWG SVs (0.25%) have such a breakend; the currently pinned hg38 tarballs
-    were produced before this was handled and carry the hg19 strand for them.
+    309,120 PCAWG SVs (0.25%) have such a breakend; the pinned hg38 tarballs include
+    this correction.
 
     PCAWG's own chrom column has no ``chr`` prefix (``"1"``, not ``"chr1"``); the
     chain file — and the GENCODE backbone this feeds into — both use ``"chr1"``.
@@ -99,6 +105,8 @@ def lift_tarball(src_tgz: Path, out_tgz: Path, lo) -> tuple[int, int]:
                         row["strand1"] = _FLIP[row["strand1"]]
                     if rev2:
                         row["strand2"] = _FLIP[row["strand2"]]
+                    # Keep svclass as source-call provenance. The SV layer derives current
+                    # junction geometry separately, including changed orientation/order.
                     # Normalize to "chr1" form (PCAWG's own columns lack the prefix) so the
                     # output matches the GENCODE backbone's own chromosome naming.
                     row["chrom1"] = row["chrom1"] if row["chrom1"].startswith("chr") else f"chr{row['chrom1']}"

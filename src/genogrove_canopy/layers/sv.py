@@ -19,10 +19,15 @@ is created:
   An insertion (``svclass="INS"``) is the same edge carrying ``length`` /
   ``insertion_class`` / ``sequence``.
 
-So "what is now next to MYC in this sample" is one hop from the MYC node over
-``breakpoint_edge``; complex rearrangements (chromoplexy, chromothripsis) are just more
-edges — a chromoplexy loop is a cycle, a chromothriptic cluster is many edges piled into
-one region. Genes are never cut, and no derivative-chromosome structure is stored.
+The graph finds junctions involving MYC by walking from its gene node. Shared gene/bin
+anchors can join unrelated breakpoints, so graph cycles or clusters do not establish
+chromoplexy or chromothripsis. Genes are never cut; no derivative chromosome is stored.
+
+``svclass`` is the source caller's classification, with h2hINV/t2tINV normalized to
+INV; ``source_svclass`` retains the exact original label. For lifted PCAWG calls these
+describe the hg19 call. ``junction_class`` describes the current coordinates/strands:
+DEL-like, DUP-like, h2hINV, t2tINV, or TRA (INS retains its explicit call). This junction
+geometry can differ after liftover and does not establish copy number or functional effect.
 
 Ephemeral, per sample: ``attach_tracked`` inserts into an already-deserialized grove and
 returns exactly what it added (edges and any new bins); ``detach`` removes that and only
@@ -104,8 +109,23 @@ def attach_tracked(grove, records):
 
     n = 0
     for r in records:
+        source_class = r["svclass"]
+        svclass = "INV" if source_class in ("h2hINV", "t2tINV") else source_class
+        if svclass == "INS":
+            junction_class = "INS"  # an insertion needs caller evidence, not strand inference
+        elif r["chrom1"] != r["chrom2"]:
+            junction_class = "TRA"
+        else:
+            p1, p2 = int(r["start1"]), int(r["start2"])
+            strands = r["strand1"] + r["strand2"]
+            if p1 > p2:
+                strands = strands[::-1]
+            junction_class = {"++": "h2hINV", "--": "t2tINV"}.get(strands)
+            if p1 != p2 and junction_class is None:
+                junction_class = {"+-": "DEL-like", "-+": "DUP-like"}.get(strands)
         edge = {
-            "rel": "breakpoint_edge", "svclass": r["svclass"], "sv_id": r["sv_id"],
+            "rel": "breakpoint_edge", "svclass": svclass, "sv_id": r["sv_id"],
+            "source_svclass": source_class, "junction_class": junction_class,
             "sample": sample,
             "chrom1": r["chrom1"], "pos1": int(r["start1"]), "strand1": r["strand1"],
             "chrom2": r["chrom2"], "pos2": int(r["start2"]), "strand2": r["strand2"],
@@ -159,12 +179,17 @@ LAYER = Layer(
          "genome structure, chromothripsis/chromoplexy, or whether a gene's regulatory "
          "context changed due to a rearrangement — scoped to one sample at a time",
     schema='one `{"rel":"breakpoint_edge", "svclass":<DEL|DUP|INV|TRA|INS>, "sv_id":.., '
+           '"source_svclass":.., "junction_class":.., '
            '"sample":.., "chrom1":.., "pos1":.., "strand1":.., "chrom2":.., "pos2":.., '
            '"strand2":.., "pe_support":..}` edge per SV (both directions) between the two '
            'backbone nodes its breakends fall in: the containing gene, or a 1 Mb '
            '`{"type":"intergenic_region"}` bin when no gene contains the position. Walk it from '
-           'a gene to see what this sample\'s rearrangement now puts next to it; the exact '
-           'breakpoint positions are on the edge. INS carries `"length"`/`"insertion_class"`/'
-           '`"sequence"` too',
+           'a gene to find junctions involving it; the exact breakpoint positions are on the '
+           'edge. `svclass` is the source call with h2hINV/t2tINV normalized to INV; '
+           '`source_svclass` preserves the original label (hg19 for PCAWG). '
+           '`junction_class` describes current-assembly geometry: DEL-like, DUP-like, '
+           'h2hINV, t2tINV, TRA, INS, or null when unresolved. Do not infer copy number '
+           'or complex rearrangement diagnoses from this geometry. INS carries '
+           '`"length"`/`"insertion_class"`/`"sequence"` too; the pinned PCAWG calls contain no INS',
     attach=attach,
 )

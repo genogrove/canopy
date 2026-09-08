@@ -122,6 +122,27 @@ def test_insertion_carries_its_payload_on_the_edge():
     assert t.data["id"] == "F"
     assert m["svclass"] == "INS" and m["length"] == "50" and m["insertion_class"] == "MEI"
     assert m["sequence"] is None                          # never invented
+    assert m["source_svclass"] == "INS" and m["junction_class"] == "INS"
+
+
+@pytest.mark.parametrize("subtype,strand", [("h2hINV", "+"), ("t2tINV", "-")])
+def test_inversion_query_matches_pcawg_subtypes(subtype, strand):
+    g = pg.Grove(order=100)
+    sv.attach_tracked(g, [_sv("S1", "SV1", "chr1", 100, strand,
+                              "chr1", 200, strand, subtype)])
+    anchor = next(iter(g.intersect(pg.GenomicCoordinate("*", 100, 100), "chr1")))
+    inversions = [m for _, m in _bp_edges(g, anchor) if m["svclass"] == "INV"]
+    assert len(inversions) == 1
+    assert inversions[0]["source_svclass"] == subtype
+    assert inversions[0]["junction_class"] == subtype
+
+
+def test_same_position_opposite_strands_do_not_imply_deletion():
+    g = pg.Grove(order=100)
+    sv.attach_tracked(g, [_sv("S1", "SV1", "chr1", 100, "+", "chr1", 100, "-", "DEL")])
+    anchor = next(iter(g.intersect(pg.GenomicCoordinate("*", 100, 100), "chr1")))
+    (_, m), = _bp_edges(g, anchor)
+    assert m["source_svclass"] == "DEL" and m["junction_class"] is None
 
 
 def test_detach_removes_only_what_attach_created():

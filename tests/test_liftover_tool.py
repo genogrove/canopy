@@ -6,6 +6,8 @@ import io
 import tarfile
 from pathlib import Path
 
+import pytest
+
 _spec = importlib.util.spec_from_file_location(
     "liftover_pcawg_sv", Path(__file__).parents[1] / "tools" / "liftover_pcawg_sv.py")
 lift = importlib.util.module_from_spec(_spec)
@@ -61,3 +63,48 @@ def test_chain_file_is_verified_even_when_cached(tmp_path, monkeypatch):
     assert lift._chain_file(tmp_path) == dest        # fresh download: verified, published
     assert dest.read_bytes() == good and not list(tmp_path.glob("*.part"))
     assert lift._chain_file(tmp_path) == dest        # cached good copy: verified again, kept
+
+
+@pytest.mark.parametrize("source_class,strands,hits,expected_class,expected_junction", [
+    # One breakend reverses: the source inversion call no longer has inversion geometry.
+    ("t2tINV", ("-", "-"), ((110, "+"), (510, "-")), "INV", "DUP-like"),
+    ("h2hINV", ("+", "+"), ((110, "-"), (510, "+")), "INV", "DUP-like"),
+    # A reversed region swaps coordinate order as well as both strands.
+    ("DEL", ("+", "-"), ((900, "-"), (500, "-")), "DEL", "DEL-like"),
+    ("h2hINV", ("+", "+"), ((900, "-"), (500, "-")), "INV", "t2tINV"),
+])
+def test_lifted_call_keeps_provenance_separate_from_junction_geometry(
+    tmp_path, source_class, strands, hits, expected_class, expected_junction,
+):
+    pg = pytest.importorskip("pygenogrove")
+    from genogrove_canopy.layers import sv
+
+    class Chain:
+        def convert_coordinate(self, chrom, pos):
+            mapped, strand = hits[0 if pos == 100 else 1]
+            return [(chrom, mapped, strand, 1.0)]
+
+    row = ["1", "100", "101", "1", "500", "501", "SV1", "5",
+           *strands, source_class, "m"]
+    src, out = tmp_path / "source.tgz", tmp_path / "lifted.tgz"
+    with tarfile.open(src, "w:gz") as t:
+        data = gzip.compress(("\t".join(lift._FIELDS) + "\n" + "\t".join(row) + "\n").encode())
+        info = tarfile.TarInfo("sample.bedpe.gz")
+        info.size = len(data)
+        t.addfile(info, io.BytesIO(data))
+    assert lift.lift_tarball(src, out, Chain()) == (1, 0)
+    bedpe = tmp_path / "sample.bedpe.gz"
+    with tarfile.open(out) as t:
+        bedpe.write_bytes(t.extractfile("sample.bedpe.gz").read())
+    records = sv.parse_bedpe(bedpe)
+    assert records[0]["svclass"] == source_class  # the artifact preserves the source label
+    records[0]["sample"] = "S1"
+    g = pg.Grove(order=100)
+    _, created = sv.attach_tracked(g, records)
+    anchor = next(iter(g.intersect(pg.GenomicCoordinate("*", 0, 999), "chr1")))
+    (_, edge), = g.get_edge_list(anchor)
+    assert edge["svclass"] == expected_class
+    assert edge["source_svclass"] == source_class
+    assert edge["junction_class"] == expected_junction
+    sv.detach(g, created)
+    assert g.size() == 0 and g.edge_count() == 0
