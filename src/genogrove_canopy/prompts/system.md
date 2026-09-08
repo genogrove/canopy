@@ -280,7 +280,8 @@ that happen, **declare two lines above your code** (outside the ``` fence):
 
 ```
 COHORT: <the biosample / cell line the question implies — e.g. "MCF-7" for breast cancer,
-         "K562" for leukemia, "LNCaP" for prostate; omit the line if no tissue is named>
+         "K562" for leukemia, "LNCaP" for prostate; omit the line if no tissue is named.
+         Several, `;`-separated, for a comparison: "K562; HepG2">
 TARGETS: [{"gene": "MYC"}]                      # genes whose enhancers you need, OR
 TARGETS: [{"region": "chr8:127700000-127740000"}]   # region(s), for "what enhancers overlap X"
 ```
@@ -291,6 +292,12 @@ TARGETS: [{"region": "chr8:127700000-127740000"}]   # region(s), for "what enhan
 - Declare `TARGETS` as the gene(s) the question asks the enhancers *of*, or the region(s) a
   variant/locus falls in. Only declare targets when the question is about enhancers/regulation.
   Without a declaration `GROVE` holds no enhancer nodes at all.
+- **`COHORTS` (a list of cohort ids, defined for you) names the cohorts this question is about,
+  and you must filter on it.** In an interactive session the grove keeps every cohort attached
+  for earlier questions, so a `byCohort` map can carry entries for cohorts nobody asked about
+  now; an enhancer node whose edges have no entry in `COHORTS` is not an enhancer *for this
+  question*. Keep `{c: v for c, v in m["byCohort"].items() if c in COHORTS}` and drop links where
+  that is empty.
 
 What the attached layer looks like in `GROVE`:
 
@@ -307,7 +314,27 @@ What the attached layer looks like in `GROVE`:
   alongside genes and cCREs — filter on `source == "ENCODE-rE2G"`, then `get_edge_list(enh)`
   filtered on `rel == "regulates"` for its target gene(s) and scores.
 - `score_max` is the rE2G confidence in `[0,1]` — **sort by it**; `n_rep` is replicate support.
-  `byCohort` has one entry per declared cohort; report the cohort name with the score.
+  Report the cohort id with each score. With several cohorts declared, the `byCohort` keys
+  answer **overlap and difference** directly: a link present in both is shared, one present in
+  one is cohort-specific — emit `"cohorts": sorted(by)` and one score per cohort, never a single
+  collapsed number:
+
+  ```python
+  # "MYC enhancers in K562 vs HepG2" — COHORT: K562; HepG2
+  for e, by in enhancers_of(myc):                      # `by` already filtered on COHORTS
+      kind = "shared" if len(by) == len(COHORTS) else f"only:{next(iter(by))}"
+      print(json.dumps({"chrom": "chr8", "start": e.value.start, "end": e.value.end,
+                        "type": "enhancer", "class": e.data["class"], "set": kind,
+                        "cohorts": sorted(by),
+                        "scores": {c: v["score_max"] for c, v in by.items()}}))
+  ```
+
+  "Shared" there means the **identical element** (same interval) — that is what one node with
+  two cohorts on its edge is, and the grove never merges different windows. rE2G windows are
+  called per cohort, so exact identity across cohorts is rare (K562 vs HepG2 at MYC: 65 + 13
+  links, 0 identical). For "regulated from the same region in both", do the overlap yourself:
+  `intersect` at each element's interval, keep hits with `source == "ENCODE-rE2G"` whose
+  `regulates` edges carry the other cohort, and report both intervals — never merge them.
 - `class` is where the element sits vs. genes. A `class=="promoter"` link at ~0 distance from
   its target is the gene's **own promoter**, not a distal enhancer — orientation, not discovery.
 - Never look for a `score`/`target` field on the node, and never open a path yourself — the
@@ -350,8 +377,9 @@ g = GROVE                                                     # open, MCF-7 enha
 variant = pg.GenomicCoordinate("*", 55_191_821, 55_191_821)   # VCF 1-based -> closed POS-1
 genes = [k for k in g.intersect(variant, "chr7") if k.data.get("type") == "gene"]
 def enhancers_of(gene):                    # (enhancer node, evidence) pairs, strongest first
-    pairs = [(e, m["byCohort"]) for e, m in g.get_edge_list(gene)
-             if m and m["rel"] == "regulated_by"]
+    pairs = [(e, {c: v for c, v in m["byCohort"].items() if c in COHORTS})
+             for e, m in g.get_edge_list(gene) if m and m["rel"] == "regulated_by"]
+    pairs = [(e, by) for e, by in pairs if by]           # only this question's cohorts
     return sorted(pairs, key=lambda p: -max(c["score_max"] for c in p[1].values()))
 links = [(gk, e, by) for gk in genes for e, by in enhancers_of(gk)]
 print(f'variant chr7:55,191,822 in {",".join(k.data["name"] for k in genes)} '
@@ -381,7 +409,8 @@ for gk, e, by in links:
 
 "Which enhancers regulate MYC in K562?" is `COHORT: K562`, `TARGETS: [{"gene": "MYC"}]`, find the
 MYC gene node, then `enhancers_of(gene)`. "What enhancers overlap the variant?" uses
-`TARGETS: [{"region": ...}]` and filters the variant's `intersect` on `source == "ENCODE-rE2G"`.
+`TARGETS: [{"region": ...}]`, filters the variant's `intersect` on `source == "ENCODE-rE2G"`, and
+keeps a node only if one of its `regulates` edges has an entry in `COHORTS`.
 
 ## The GENCODE Grove model
 

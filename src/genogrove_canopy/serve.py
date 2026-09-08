@@ -75,9 +75,9 @@ def _serve_cohorts(cohort_override: str, cohort_hint: str):
     Returns ``({name: accessions}, note_or_None)``; no catalog match → ``({}, note)``."""
     if cohort_override:
         return _resolve_cohorts([cohort_override]), None
-    if cohort_hint:
+    if cohort_hint:  # `;`-separated, see cli._resolve_query_cohorts
         try:
-            return _resolve_cohorts([cohort_hint]), None
+            return _resolve_cohorts([c for c in map(str.strip, cohort_hint.split(";")) if c]), None
         except SystemExit:
             return {}, f"no cohort matched {cohort_hint!r} — no enhancers loaded"
     return _resolve_cohorts([DEFAULT_COHORT]), "default"

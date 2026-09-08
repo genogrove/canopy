@@ -100,12 +100,20 @@ def test_warm_worker_reuses_the_attached_grove_and_a_query_cannot_mutate_it(tmp_
     # The view hides the grove, but a bound method's `__self__` still names it — good enough to
     # prove both runs used the same object, i.e. the second was a memo hit.
     ident = "print('id', id(GROVE.intersect.__self__))\n"
+    links2 = tmp_path / "d.links.tsv"       # a second cohort: the same element plus a new one
+    links2.write_text("chr1\t100\t200\tintergenic\tENSG1\tchr1\t1000\t2\t0.4\t0.7\n"
+                      "chr1\t300\t400\tintergenic\tENSG1\tchr1\t1000\t1\t0.1\t0.2\n")
+    pre2 = "import json\n" + enhancers.preamble(str(gg), {"D": str(links2)})
+    both = ("gene = next(iter(GROVE.intersect(pg.GenomicCoordinate('*', 1500, 1500), 'chr1')))\n"
+            "print('cohorts', sorted(set(c for m in GROVE.get_edges(gene)"
+            " if m and m.get('rel') == 'regulated_by' for c in m['byCohort'])), COHORTS)\n")
     w = sandbox.Worker(data_paths=[str(tmp_path)], extra_syspath=[_pygenogrove_site_dir()])
     try:
         first = w.submit(pre + count + ident
                          + "try:\n    GROVE.insert('chr1', pg.GenomicCoordinate('.', 5, 6), {})\n"
                          "except AttributeError as e:\n    print('refused', e)\n")
         second = w.submit(pre + count + ident)
+        third = w.submit(pre2 + count + ident + both)
     finally:
         w.close()
 
@@ -113,5 +121,10 @@ def test_warm_worker_reuses_the_attached_grove_and_a_query_cannot_mutate_it(tmp_
     assert "enh 1" in first.stdout and "refused" in first.stdout
     assert second.returncode == 0, second.stderr
     assert "enh 1" in second.stdout                       # the refused insert left no trace
-    ids = [ln for ln in (first.stdout + second.stdout).splitlines() if ln.startswith("id ")]
-    assert len(ids) == 2 and ids[0] == ids[1]             # same grove object: memo hit
+    assert third.returncode == 0, third.stderr
+    # Cohort D attached onto the SAME grove: its new element appears, the shared element merged
+    # (one node, both cohorts on the gene's edges), and COHORTS names only this question's.
+    assert "enh 2" in third.stdout
+    assert "cohorts ['C', 'D'] ['D']" in third.stdout
+    ids = [ln for ln in (first.stdout + second.stdout + third.stdout).splitlines() if ln.startswith("id ")]
+    assert len(ids) == 3 and len(set(ids)) == 1            # same grove object throughout

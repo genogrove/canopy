@@ -318,9 +318,9 @@ def _resolve_query_cohorts(args, cohort_hint):
     Returns ``({name: accessions}, note)`` where ``note`` is a stderr line or ``None``."""
     if args.cohort:
         return _resolve_cohorts(args.cohort), None
-    if cohort_hint:
+    if cohort_hint:  # one or more, `;`-separated — a comparison question names several
         try:
-            return _resolve_cohorts([cohort_hint]), None
+            return _resolve_cohorts([c for c in map(str.strip, cohort_hint.split(";")) if c]), None
         except SystemExit:  # the model named a tissue with no catalog match — don't substitute
             return {}, f"no ENCODE cohort matched {cohort_hint!r} — no enhancers loaded (see --list-cohorts)"
     return _resolve_cohorts([DEFAULT_COHORT]), "default"

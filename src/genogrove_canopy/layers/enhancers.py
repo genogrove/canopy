@@ -261,16 +261,20 @@ def preamble(gg: str, cohort_links: dict[str, str] | None = None) -> str:
     Without cohorts that is ``pg.GroveView.open(gg)`` — lazy, ~200 ms, exactly what a
     non-regulatory question paid before. With ``cohort_links`` (cohort id -> its links file path,
     see ``links_file``), the grove is deserialized **mutable** and each cohort's links are attached
-    in the sandbox in turn (~6 s, ~1.8 GB for the first; an element linking to the same gene in two
-    cohorts merges its ``byCohort`` payload onto one edge rather than duplicating — see
-    ``attach_links``), because that is the only place the generated code can reach them: an
-    in-memory grove cannot cross the process boundary, and the records cannot be injected as a
-    literal (~34 MB of program text for one cohort alone).
+    in the sandbox (~6 s to deserialize, ~8 s for a large cohort), because that is the only place
+    the generated code can reach them: an in-memory grove cannot cross the process boundary, and
+    the records cannot be injected as a literal (~34 MB of program text for one cohort alone).
 
-    The build is memoised in ``_CANOPY_STATE``, which survives between queries in a warm worker,
-    so an interactive session pays it once. The key is the grove path *and* the full set of
-    (cohort, links) pairs, since a stale grove here is a silently wrong answer. Only one entry is
-    kept: a different cohort selection evicts and rebuilds.
+    The grove is memoised in ``_CANOPY_STATE``, which survives between queries in a warm worker,
+    **and grows**: a cohort asked about later is attached onto the same grove (the shared
+    ``nodes`` cache is kept in the state so ``attach_links`` merges it onto existing elements and
+    edges), never rebuilt. So after a breast-cancer question and then a prostate one, the grove
+    holds both, one edge per shared link with both cohorts in its ``byCohort`` — which is what
+    makes "in prostate but not breast" or "shared by both" a set operation on that map. The
+    generated code is told which cohorts *this* question is about through ``COHORTS`` and must
+    filter on it; the prompt says so.
+    ponytail: the grove only grows within a session — a few hundred MB per cohort, no eviction.
+    Add an LRU over ``cohorts`` if sessions that wander across many tissues turn up.
 
     ``ENHANCERS`` is still defined, and always empty. Generated code from an older prompt that
     loops over it gets nothing rather than a ``NameError``; the enhancers are in the grove now.
@@ -278,30 +282,28 @@ def preamble(gg: str, cohort_links: dict[str, str] | None = None) -> str:
     import json
 
     if not cohort_links:
-        return f"import pygenogrove as pg\nGROVE = pg.GroveView.open({json.dumps(gg)})\nENHANCERS = []\n"
+        return (f"import pygenogrove as pg\nGROVE = pg.GroveView.open({json.dumps(gg)})\n"
+                "COHORTS = []\nENHANCERS = []\n")
 
     import inspect
 
-    attach_calls = "".join(
-        f"    attach_links(_grove, {json.dumps(links)}, {json.dumps(cohort)}, _nodes)\n"
-        for cohort, links in cohort_links.items()
-    )
     return (
         "import pygenogrove as pg\n"
         f"{inspect.getsource(attach_links)}\n"
-        f"_key = ({json.dumps(gg)}, tuple(sorted({json.dumps(cohort_links)}.items())))\n"
         "_state = globals().get('_CANOPY_STATE')\n"       # absent in one-shot `sandbox.run`
-        "if _state is not None and _state.get('key') == _key:\n"
-        "    _grove = _state['grove']\n"
-        "else:\n"
-        "    if _state is not None:\n"
-        "        _state.clear()\n"   # drop the stale grove BEFORE deserializing the next one:
-        # both live at once is ~1.8 GB + a ~2 GB deserialize peak against the 4 GiB sandbox cap
-        f"    _grove = pg.Grove.deserialize({json.dumps(gg)})\n"
-        "    _nodes = {}\n"                                  # one element cache across cohorts
-        f"{attach_calls}"
-        "    if _state is not None:\n"
-        "        _state.update(key=_key, grove=_grove)\n"
+        "if _state is None:\n"
+        "    _state = {}\n"
+        f"if _state.get('gg') != {json.dumps(gg)}:\n"
+        "    _state.clear()\n"   # drop a stale grove BEFORE deserializing the next one: both
+        # live at once is ~1.8 GB + a ~2 GB deserialize peak against the 4 GiB sandbox cap
+        f"    _state.update(gg={json.dumps(gg)}, grove=pg.Grove.deserialize({json.dumps(gg)}),\n"
+        "                  nodes={}, cohorts=set())\n"
+        "_grove = _state['grove']\n"
+        f"for _c, _links in {json.dumps(sorted(cohort_links.items()))}:\n"
+        "    if _c not in _state['cohorts']:\n"            # attach onto the warm grove, once
+        "        attach_links(_grove, _links, _c, _state['nodes'])\n"
+        "        _state['cohorts'].add(_c)\n"
+        f"COHORTS = {json.dumps(sorted(cohort_links))}\n"  # this question's cohorts, by id
         # The memoised grove is a mutable `Grove` shared by every query of the session. Hand the
         # generated code a view that forwards only what a read-only `GroveView` has (plus the
         # count/lookup helpers), so a query cannot insert into it and quietly change the next
@@ -323,7 +325,7 @@ def preamble(gg: str, cohort_links: dict[str, str] | None = None) -> str:
         # Drop the host-only names from the namespace the generated code runs in, so a query
         # won't by accident evict or swap the grove the next query in a warm session is given.
         # (`sys.modules['__main__']` can still reach it — the sandbox's documented residual risk.)
-        "for _n in ('_CANOPY_STATE', '_state', '_key', '_grove', '_readonly', '_n'):\n"
+        "for _n in ('_CANOPY_STATE', '_state', '_grove', '_c', '_links', '_readonly', '_n'):\n"
         "    globals().pop(_n, None)\n"
         "ENHANCERS = []\n"
     )
