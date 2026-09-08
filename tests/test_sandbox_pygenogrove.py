@@ -128,3 +128,47 @@ def test_warm_worker_reuses_the_attached_grove_and_a_query_cannot_mutate_it(tmp_
     assert "cohorts ['C', 'D'] ['D']" in third.stdout
     ids = [ln for ln in (first.stdout + second.stdout + third.stdout).splitlines() if ln.startswith("id ")]
     assert len(ids) == 3 and len(set(ids)) == 1            # same grove object throughout
+
+
+def test_system_prompt_worked_example_runs_against_the_attached_grove(tmp_path):
+    """The prompt's worked example is the codegen contract in executable form. Run it, verbatim,
+    through the real sandbox on a small grove with a cohort attached — the drift this guards
+    against (prompt says one thing, preamble does another) shipped enhancer answers with zero
+    rows once, and no test executed the example."""
+    import json
+    import re
+    from pathlib import Path
+
+    from genogrove_canopy.layers import enhancers
+
+    md = (Path(enhancers.__file__).parents[1] / "prompts" / "system.md").read_text()
+    m = re.search(r"### Worked example.*?COHORT: MCF-7\nTARGETS: .*?\n\n```python\n(.*?)```", md, re.S)
+    assert m, "worked example not found in system.md"
+    example = m.group(1)
+
+    # EGFR at the example's variant (chr7:55,191,822 -> closed 55_191_821), one cCRE under the
+    # enhancer window, one MCF-7 link whose target TSS (1-based) lies inside the gene.
+    g = pg.Grove(order=100)
+    g.insert("chr7", pg.GenomicCoordinate("+", 55_018_819, 55_211_627),
+             {"type": "gene", "id": "ENSG00000146648.23", "name": "EGFR", "biotype": "protein_coding"})
+    g.insert("chr7", pg.GenomicCoordinate(".", 55_018_400, 55_018_700),
+             {"type": "regulatory_region", "source": "ENCODE-SCREEN", "class": "PLS",
+              "id": "EH38E0000001", "rdhs": "EH38D0000001"})
+    gg = tmp_path / "egfr.gg"
+    g.serialize(str(gg))
+    links = tmp_path / "mcf7.links.tsv"
+    links.write_text("chr7\t55018383\t55019773\tpromoter\tENSG00000146648\tchr7\t55018820\t1\t0.9\t0.99999\n")
+
+    code = "import json\n" + enhancers.preamble(str(gg), {"EFO:0001203": str(links)}) + example
+    result = sandbox.run(code, data_paths=[str(tmp_path)], extra_syspath=[_pygenogrove_site_dir()])
+
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert lines[0] == "variant chr7:55,191,822 in EGFR (1 gene, 1 enhancer links):"
+    rows = [json.loads(ln) for ln in lines[1:]]
+    assert [r["type"] for r in rows] == ["gene", "enhancer"]
+    enh = rows[1]
+    assert (enh["start"], enh["end"]) == (55_018_383, 55_019_772)       # BED half-open -> closed
+    assert enh["score"] == 0.99999 and enh["n"] == 1 and enh["cohort"] == "EFO:0001203"
+    assert enh["target"] == "EGFR" and enh["name"] == "enh:promoter->EGFR"
+    assert enh["ccre_overlap"] == [{"id": "EH38E0000001", "class": "PLS", "bp": 301}]
