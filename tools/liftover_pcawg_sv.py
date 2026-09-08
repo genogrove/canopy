@@ -36,10 +36,13 @@ _FIELDS = ("chrom1", "start1", "end1", "chrom2", "start2", "end2",
 
 
 def _chain_file(out_dir: Path) -> Path:
+    """The pinned chain file, sha256-verified on every run — a cached copy included, since an
+    interrupted download would otherwise be trusted forever and lift against a partial chain."""
     dest = out_dir / "hg19ToHg38.over.chain.gz"
-    if dest.exists():
-        return dest
-    urllib.request.urlretrieve(CHAIN_URL, dest)  # noqa: S310 — fixed UCSC host
+    if not dest.exists():
+        tmp = dest.with_name(dest.name + ".part")
+        urllib.request.urlretrieve(CHAIN_URL, tmp)  # noqa: S310 — fixed UCSC host
+        tmp.replace(dest)
     digest = hashlib.sha256(dest.read_bytes()).hexdigest()
     if digest != CHAIN_SHA256:
         dest.unlink()

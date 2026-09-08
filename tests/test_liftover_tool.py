@@ -42,3 +42,22 @@ def test_lift_tarball_flips_the_strand_of_a_reversed_breakend(tmp_path):
     with tarfile.open(out) as t:
         text = gzip.decompress(t.extractfile("icgc/open/s.bedpe.gz").read()).decode()
     assert text.splitlines()[1] == "chr1\t110\t111\tchr2\t510\t511\tSV1\t5\t+\t+\tTRA\tm"
+
+
+def test_chain_file_is_verified_even_when_cached(tmp_path, monkeypatch):
+    import hashlib
+    import pytest
+
+    good = b"chain-bytes"
+    monkeypatch.setattr(lift, "CHAIN_SHA256", hashlib.sha256(good).hexdigest())
+    monkeypatch.setattr(lift.urllib.request, "urlretrieve", lambda url, dst: Path(dst).write_bytes(good))
+
+    dest = tmp_path / "hg19ToHg38.over.chain.gz"
+    dest.write_bytes(good[:4])                       # a truncated cached copy from an interrupted run
+    with pytest.raises(RuntimeError, match="sha256 mismatch"):
+        lift._chain_file(tmp_path)
+    assert not dest.exists()                         # the bad copy is gone, not trusted next time
+
+    assert lift._chain_file(tmp_path) == dest        # fresh download: verified, published
+    assert dest.read_bytes() == good and not list(tmp_path.glob("*.part"))
+    assert lift._chain_file(tmp_path) == dest        # cached good copy: verified again, kept
