@@ -190,7 +190,8 @@ def test_grove_context_grants_resolved_paths_so_a_symlinked_cache_works(tmp_path
     g.insert("chr1", pg.GenomicCoordinate("+", 999, 1999), {"type": "gene", "id": "ENSG1.2"})
     g.serialize(str(real / "mini.gg"))
     (real / "links").mkdir()
-    (real / "links" / "c.links.tsv").write_text("chr1\t100\t200\tintergenic\tENSG1\tchr1\t1000\t1\t0.5\t0.9\n")
+    (real / "links" / f"{enhancers._slug('C')}.links.tsv").write_text(  # the name links_file expects
+        "chr1\t100\t200\tintergenic\tENSG1\tchr1\t1000\t1\t0.5\t0.9\n")
     monkeypatch.setattr(resources, "ensure_all_grove", lambda name: link / "mini.gg")   # via the symlink
     monkeypatch.setattr(enhancers, "LINKS_DIR", link / "links")
     monkeypatch.setattr(enhancers, "ensure_index", lambda c: True)
