@@ -56,7 +56,7 @@ def generate_query(question: str, system_prompt: str, *, model: str = DEFAULT_MO
     sandbox; nothing is executed here. Raises ``RuntimeError`` if the model declines.
 
     ``on_usage``, if given, is called with the response's ``usage`` object before parsing — a
-    side channel for cost accounting (benchmarks/bench.py) that keeps the return shape stable for
+    side channel for cost accounting (a benchmark harness, not part of the package) that keeps the return shape stable for
     ``cli``/``serve``, which don't care. A callback rather than module state because ``serve``
     answers questions on multiple threads.
     """
