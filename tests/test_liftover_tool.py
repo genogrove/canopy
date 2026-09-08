@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""The one-off liftover tool's per-record logic, with a stub lifter (no pyliftover, no chain)."""
+import gzip
+import importlib.util
+import io
+import tarfile
+from pathlib import Path
+
+_spec = importlib.util.spec_from_file_location(
+    "liftover_pcawg_sv", Path(__file__).parents[1] / "tools" / "liftover_pcawg_sv.py")
+lift = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(lift)
+
+
+class _Lifter:
+    """chrom, pos -> [(chrom, pos + 10, strand, score)]; pos 999 maps nowhere, pos 500 reverses."""
+    def convert_coordinate(self, chrom, pos):
+        if pos == 999:
+            return []
+        return [(chrom, pos + 10, "-" if pos == 500 else "+", 1.0)]
+
+
+def test_lift_one_reports_position_and_reversal():
+    lo = _Lifter()
+    assert lift._lift_one(lo, "1", 100) == (110, False)     # "1" -> "chr1", shifted, same strand
+    assert lift._lift_one(lo, "chr1", 500) == (510, True)   # minus-strand chain block
+    assert lift._lift_one(lo, "1", 999) is None             # no mapping
+
+
+def test_lift_tarball_flips_the_strand_of_a_reversed_breakend(tmp_path):
+    header = "\t".join(lift._FIELDS) + "\n"
+    rows = ("1\t100\t101\t2\t500\t501\tSV1\t5\t+\t-\tTRA\tm\n"    # breakend 2 reverses
+            "1\t100\t101\t1\t999\t1000\tSV2\t5\t+\t-\tDEL\tm\n")  # breakend 2 unmappable
+    src = tmp_path / "in.tgz"
+    with tarfile.open(src, "w:gz") as t:
+        data = gzip.compress((header + rows).encode())
+        info = tarfile.TarInfo("icgc/open/s.bedpe.gz"); info.size = len(data)
+        t.addfile(info, io.BytesIO(data))
+
+    out = tmp_path / "out.tgz"
+    assert lift.lift_tarball(src, out, _Lifter()) == (1, 1)
+    with tarfile.open(out) as t:
+        text = gzip.decompress(t.extractfile("icgc/open/s.bedpe.gz").read()).decode()
+    assert text.splitlines()[1] == "chr1\t110\t111\tchr2\t510\t511\tSV1\t5\t+\t+\tTRA\tm"

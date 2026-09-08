@@ -47,9 +47,17 @@ def _chain_file(out_dir: Path) -> Path:
     return dest
 
 
-def _lift_one(lo, chrom: str, pos: int) -> int | None:
-    """hg19 0-based ``pos`` -> hg38 0-based, or ``None`` if it doesn't lift cleanly
-    (no result, or lands on a different/unplaced contig).
+_FLIP = {"+": "-", "-": "+"}
+
+
+def _lift_one(lo, chrom: str, pos: int) -> tuple[int, bool] | None:
+    """hg19 0-based ``pos`` -> ``(hg38 0-based pos, reversed)``, or ``None`` if it doesn't
+    lift cleanly (no result, or lands on a different/unplaced contig).
+
+    ``reversed`` is True when the chain block is on the minus strand — the sequence is
+    inverted between assemblies there, so a breakend's orientation flips with it. 778 of
+    309,120 PCAWG SVs (0.25%) have such a breakend; the currently pinned hg38 tarballs
+    were produced before this was handled and carry the hg19 strand for them.
 
     PCAWG's own chrom column has no ``chr`` prefix (``"1"``, not ``"chr1"``); the
     chain file — and the GENCODE backbone this feeds into — both use ``"chr1"``.
@@ -58,7 +66,7 @@ def _lift_one(lo, chrom: str, pos: int) -> int | None:
     hits = lo.convert_coordinate(chrom, pos)
     if not hits or hits[0][0] != chrom:
         return None
-    return hits[0][1]
+    return hits[0][1], hits[0][2] == "-"
 
 
 def lift_tarball(src_tgz: Path, out_tgz: Path, lo) -> tuple[int, int]:
@@ -78,11 +86,16 @@ def lift_tarball(src_tgz: Path, out_tgz: Path, lo) -> tuple[int, int]:
                     if len(parts) != len(_FIELDS):
                         continue
                     row = dict(zip(_FIELDS, parts))
-                    p1 = _lift_one(lo, row["chrom1"], int(row["start1"]))
-                    p2 = _lift_one(lo, row["chrom2"], int(row["start2"]))
-                    if p1 is None or p2 is None:
+                    h1 = _lift_one(lo, row["chrom1"], int(row["start1"]))
+                    h2 = _lift_one(lo, row["chrom2"], int(row["start2"]))
+                    if h1 is None or h2 is None:
                         dropped += 1
                         continue
+                    (p1, rev1), (p2, rev2) = h1, h2
+                    if rev1:
+                        row["strand1"] = _FLIP[row["strand1"]]
+                    if rev2:
+                        row["strand2"] = _FLIP[row["strand2"]]
                     # Normalize to "chr1" form (PCAWG's own columns lack the prefix) so the
                     # output matches the GENCODE backbone's own chromosome naming.
                     row["chrom1"] = row["chrom1"] if row["chrom1"].startswith("chr") else f"chr{row['chrom1']}"
