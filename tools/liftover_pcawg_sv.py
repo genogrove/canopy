@@ -125,8 +125,8 @@ def main() -> None:
     lo = LiftOver(str(chain))
 
     for name in ("pcawg.sv.icgc", "pcawg.sv.tcga"):
-        src = resources.resolve(f"{name}.hg19")               # the pinned ORIGINAL, never the
-        stem = Path(resources.RESOURCES[name].filename).stem  # hg38 output this produces
+        src = resources.resolve(f"{name}.hg19")  # the pinned ORIGINAL, never this tool's output
+        stem = Path(resources.RESOURCES[f"{name}.hg19"].filename).stem  # strips the trailing .tgz
         out = out_dir / f"{stem}.hg38.tgz"
         kept, dropped = lift_tarball(src, out, lo)
         digest = hashlib.sha256(out.read_bytes()).hexdigest()
