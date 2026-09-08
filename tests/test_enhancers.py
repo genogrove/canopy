@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Host-side enhancer layer: target parsing, gene→TSS resolution, the ENHANCERS injection,
-and (when the index bundle is present) the tabix lookups. The generated query code can't read
-the index — the sandbox allowlist blocks file I/O — so these run host-side only."""
+"""Enhancer layer: declaration parsing, the sandbox preamble (attach-into-grove, memoisation,
+the read-only view), `attach_links` against real bindings, and the pinned index bookkeeping."""
 import pytest
 
 from genogrove_canopy import llm
@@ -45,13 +44,6 @@ def test_declarations_never_leak_into_code(text):
     assert "COHORT" not in code and "TARGETS" not in code and code.strip() == "p()"
 
 
-def test_resolve_gene():
-    # gene_tss.tsv.gz ships in the package, so this works without the index
-    hit = enhancers.resolve_gene("MYC")
-    assert hit == ("ENSG00000136997", "chr8", 127735434)
-    assert enhancers.resolve_gene("NOT_A_GENE") is None
-
-
 def test_preamble_no_cohorts_opens_lazily():
     pre = enhancers.preamble("/tmp/x.gg")
     assert pre == ('import pygenogrove as pg\n'
@@ -73,16 +65,6 @@ def test_preamble_with_cohorts_attaches_each_onto_one_grove():
 
 @pytest.mark.skipif(not enhancers.index_present(FLAGSHIP),
                     reason="rE2G index bundle not present (download/build it first)")
-def test_fetch_for_targets_gene_and_region():
-    recs = enhancers.fetch_for_targets(
-        [{"gene": "MYC"}, {"region": "chr8:127700000-127740000"}], [FLAGSHIP])
-    assert recs
-    assert all("target_gene" in r and "score_max" in r for r in recs)
-    # deduped across the two overlapping targets
-    keys = {(r["chrom"], r["start"], r["end"], r["target_gene"], r["cohort"]) for r in recs}
-    assert len(keys) == len(recs)
-
-
 def test_index_present_requires_every_file_not_just_the_tables(tmp_path, monkeypatch):
     """A cohort with tables but no tabix indexes is *not* ready.
 

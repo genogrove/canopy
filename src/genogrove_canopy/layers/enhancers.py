@@ -17,8 +17,6 @@ Indexes (built by tools, one pair per cohort, in ``INDEX_DIR``):
 from __future__ import annotations
 
 import gzip
-import shutil
-import subprocess
 from functools import lru_cache
 from pathlib import Path
 
@@ -27,8 +25,8 @@ from genogrove_canopy.layers._base import Layer
 
 # The index bundle is pinned per file on Hugging Face and fetched a cohort at a time — four files,
 # ~8 MB, not the whole 3 GB. Until it was pinned this directory had to be built locally, so a
-# cohort absent from it made `fetch_for_targets` silently return nothing on every machine but the
-# one that built it. gene_tss ships in the package (small).
+# cohort absent from it made a lookup silently return nothing on every machine but the one that
+# built it. gene_tss ships in the package (small).
 INDEX_DIR = resources._CACHE / "re2g_index"
 # Derived, plain-text, one file per cohort — what the sandbox is granted and reads (it has no
 # `gzip`). Rebuilt from the pinned index in under a second, so it is disposable cache, not an
@@ -57,57 +55,8 @@ def _gene_tss():
     return by_ens, by_sym
 
 
-def resolve_gene(gene: str):
-    """A gene symbol or ENSG id -> ``(ensembl_base, chrom, tss)``, or ``None`` if unknown."""
-    by_ens, by_sym = _gene_tss()
-    ens = (gene if gene.upper().startswith("ENSG") else by_sym.get(gene) or "").split(".")[0]
-    loc = by_ens.get(ens)
-    return (ens, *loc) if loc else None
-
-
 def _slug(cohort: str) -> str:
     return cohort.replace(":", "_")
-
-
-def _require_tabix() -> None:
-    if shutil.which("tabix") is None:
-        raise RuntimeError("`tabix` not found — install htslib (e.g. `brew install htslib`).")
-
-
-def _query(index: Path, region: str, key_cols: int) -> list[dict]:
-    """tabix ``region`` on ``index``; drop ``key_cols`` leading key columns; rows -> dicts."""
-    if not index.exists():
-        raise FileNotFoundError(f"{index} missing — enhancer index not present for this cohort "
-                                f"(expected under {INDEX_DIR}).")
-    _require_tabix()
-    out = subprocess.run(["tabix", str(index), region],
-                         capture_output=True, text=True, check=True).stdout
-    recs = []
-    for ln in out.splitlines():
-        if not ln:
-            continue
-        f = ln.split("\t")[key_cols:]
-        recs.append(dict(zip(_FIELDS, f)))
-    return recs
-
-
-def enhancers_of_gene(gene: str, cohort: str) -> list[dict]:
-    """Enhancers predicted to regulate ``gene`` in ``cohort`` (Index B, by target-gene TSS).
-
-    ``gene`` is a symbol (``"MYC"``) or ENSG id; ``cohort`` is a biosample ontology id
-    (``"EFO:0005726"``). Empty list if the gene is unknown or has no linked enhancers.
-    """
-    hit = resolve_gene(gene)
-    if hit is None:
-        return []
-    _ens, chrom, tss = hit
-    return _query(INDEX_DIR / f"{_slug(cohort)}.byTargetGene.tsv.gz", f"{chrom}:{tss}-{tss}", 3)
-
-
-def enhancers_in_region(chrom: str, start: int, end: int, cohort: str) -> list[dict]:
-    """Enhancers overlapping ``chrom:start-end`` in ``cohort`` (Index A, by enhancer coordinate),
-    each carrying its ``target_gene`` — for ``variant ∩ enhancer -> gene`` questions."""
-    return _query(INDEX_DIR / f"{_slug(cohort)}.byEnhancer.tsv.gz", f"{chrom}:{start}-{end}", 0)
 
 
 def attach_links(grove, path, cohort, nodes=None):
@@ -218,41 +167,6 @@ def links_file(cohort: str) -> Path:
                                  r["n_rep"], r["score_mean"], r["score_max"])) + "\n")
     tmp.replace(dest)  # atomic: a half-written table must never look cached
     return dest
-
-
-def fetch_for_targets(targets, cohorts) -> list[dict]:
-    """Enhancers for the LLM-declared ``targets`` across the selected ``cohorts`` (ontology ids).
-
-    ``targets`` is a list of ``{"gene": "MYC"}`` and/or ``{"region": "chr8:127000000-128000000"}``.
-    Deduped by (coord, target gene, cohort). This is what the host injects as ``ENHANCERS`` before
-    running the generated query — only the enhancers the question actually asked for.
-    """
-    by_ens, _ = _gene_tss()
-    out, seen = [], set()
-    for cohort in cohorts:
-        if not ensure_index(cohort):
-            continue
-        for t in targets or []:
-            if t.get("gene"):
-                recs = enhancers_of_gene(t["gene"], cohort)
-            elif t.get("region"):
-                chrom, span = t["region"].split(":")
-                s, e = span.replace(",", "").split("-")
-                recs = enhancers_in_region(chrom, int(s), int(e), cohort)
-            else:
-                continue
-            for r in recs:
-                key = (r["chrom"], r["start"], r["end"], r["target_gene"], r["cohort"])
-                if key in seen:
-                    continue
-                seen.add(key)
-                # Enrich with the target gene's locus so a grove augment can place the
-                # regulates/regulated_by edge (and a query can hop into the gene's structure).
-                loc = by_ens.get(r["ensembl_id"].split(".")[0])
-                if loc:
-                    r["target_chrom"], r["target_tss"] = loc[0], str(loc[1])
-                out.append(r)
-    return out
 
 
 def preamble(gg: str, cohort_links: dict[str, str] | None = None) -> str:
