@@ -11,9 +11,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `breakpoint_edge` each between the backbone nodes its breakends fall in — the containing
   gene, or a 1 Mb `intergenic_region` bin created on demand outside every gene — carrying the
   exact positions, strands and class (INS carries its payload on the edge). Genes are never
-  cut. Ephemeral per sample via `attach_tracked`/`detach` on a warm, reused grove. PCAWG consensus SV calls (ICGC + TCGA, open
-  access) are pinned as the source, lifted hg19→GRCh38 once by `tools/liftover_pcawg_sv.py` and
-  re-hosted as derived artifacts. Alongside: `transcript` joins `exon` as an external key (only
+  cut. Ephemeral per sample via `attach_tracked`/`detach` on a warm, reused grove. The pinned `pcawg.sv.icgc` / `pcawg.sv.tcga`
+  resources are the GRCh38 *derived* tarballs — PCAWG consensus SV calls (ICGC + TCGA, open
+  access) lifted from hg19 once by `tools/liftover_pcawg_sv.py` and re-hosted; the hg19 inputs
+  are not yet pinned (tracked in the PR review). Alongside: `transcript` joins `exon` as an external key (only
   `gene` is indexed; grove schema v8, re-pinned under pygenogrove 0.9.0), rE2G links now attach
   onto the grove in the sandbox instead of being injected as a literal, and
   `.github/workflows/create-pr.yml` auto-opens a PR for any pushed branch without one
