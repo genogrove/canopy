@@ -97,9 +97,8 @@ def test_warm_worker_reuses_the_attached_grove_and_a_query_cannot_mutate_it(tmp_
     count = ("enh = [k for k in GROVE.intersect(pg.GenomicCoordinate('*', 0, 5000), 'chr1')"
              " if k.data.get('type') == 'enhancer']\nprint('enh', len(enh))\n")
 
-    # The view hides the grove, but a bound method's `__self__` still names it — good enough to
-    # prove both runs used the same object, i.e. the second was a memo hit.
-    ident = "print('id', id(GROVE.intersect.__self__))\n"
+    # No handle on the grove leaks through the view — not even a bound method's `__self__`.
+    ident = "print('leak', hasattr(GROVE.intersect, '__self__'))\n"
     links2 = tmp_path / "d.links.tsv"       # a second cohort: the same element plus a new one
     links2.write_text("chr1\t100\t200\tintergenic\tENSG1\tchr1\t1000\t2\t0.4\t0.7\n"
                       "chr1\t300\t400\tintergenic\tENSG1\tchr1\t1000\t1\t0.1\t0.2\n")
@@ -129,9 +128,10 @@ def test_warm_worker_reuses_the_attached_grove_and_a_query_cannot_mutate_it(tmp_
     # Cohort D attached onto the SAME grove: its new element appears, the shared element merged
     # (one node, both cohorts on the gene's edges), and COHORTS names only this question's.
     assert "enh 2" in third.stdout
+    # 'C' on the gene's edges in a query that declared only 'D' proves the grove was reused,
+    # not rebuilt (a rebuild would carry D alone); COHORTS still names only this question's.
     assert "cohorts ['C', 'D'] ['D']" in third.stdout
-    ids = [ln for ln in (first.stdout + second.stdout + third.stdout).splitlines() if ln.startswith("id ")]
-    assert len(ids) == 3 and len(set(ids)) == 1            # same grove object throughout
+    assert "leak True" not in first.stdout + second.stdout + third.stdout
 
 
 def test_system_prompt_worked_example_runs_against_the_attached_grove(tmp_path):
