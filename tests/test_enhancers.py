@@ -186,3 +186,34 @@ def test_preamble_hides_the_worker_state_and_hands_out_a_read_only_view():
     with pytest.raises(AttributeError):
         view.insert("chr1", None, {})                        # mutators do not
     assert state["grove"].size() == 1                        # ...so the memoised grove is untouched
+
+
+def test_links_file_builds_the_plain_table_the_sandbox_reads(tmp_path, monkeypatch):
+    """`links_file` turns a cohort's gzipped byEnhancer index into the plain TSV the sandbox is
+    granted: exactly the ten columns `attach_links` reads, the Ensembl id unversioned, the target
+    TSS filled in from the bundled gene table, rows whose target is unknown dropped here (the
+    sandbox could not resolve them anyway), and the result cached."""
+    import gzip
+
+    cohort = "EFO:0000001"
+    monkeypatch.setattr(enhancers, "INDEX_DIR", tmp_path / "idx")
+    monkeypatch.setattr(enhancers, "LINKS_DIR", tmp_path / "links")
+    monkeypatch.setattr(enhancers, "ensure_index", lambda c: True)
+    src = enhancers.INDEX_DIR / f"{enhancers._slug(cohort)}.byEnhancer.tsv.gz"
+    src.parent.mkdir()
+    row = lambda ens, start: "\t".join(  # noqa: E731 — the 11 index columns, in _FIELDS order
+        ("chr8", str(start), str(start + 500), "MYC", ens, "intergenic", "FALSE",
+         cohort, "2", "0.4", "0.9")) + "\n"
+    with gzip.open(src, "wt") as fh:
+        fh.write(row("ENSG00000136997.20", 100) + row("ENSG99999999", 200) + row("ENSG00000136997", 300))
+
+    dest = enhancers.links_file(cohort)
+    rows = [ln.split("\t") for ln in dest.read_text().splitlines()]
+    assert dest == enhancers.LINKS_DIR / f"{enhancers._slug(cohort)}.links.tsv"
+    assert [r[1] for r in rows] == ["100", "300"]                    # the unknown target is dropped
+    assert rows[0] == ["chr8", "100", "600", "intergenic", "ENSG00000136997",
+                       "chr8", "127735434", "2", "0.4", "0.9"]         # unversioned id, TSS filled in
+    assert not list(enhancers.LINKS_DIR.glob("*.tmp"))               # written atomically
+
+    src.unlink()
+    assert enhancers.links_file(cohort) == dest                      # cached: the index is not reread
