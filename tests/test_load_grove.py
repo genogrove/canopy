@@ -45,18 +45,19 @@ def test_grove_index_builds_shards_and_whole(monkeypatch, tmp_path) -> None:
     assert _all_gg(tmp_path, sha).exists()
     # the chr1 shard and the whole grove both hold the 3 features, edges intact
     chr1 = pg.Grove.deserialize(shards["chr1"])
-    assert chr1.size() == 3
+    assert chr1.size() == 1               # only the gene is indexed; transcript + exon external
+    assert chr1.vertex_count() == 3        # ...but all 3 features are still in the grove
     gene = next(k for k in chr1.intersect(pg.GenomicCoordinate("*", 1500, 1500), "chr1")
                 if k.data["type"] == "gene")
     assert [n.data["type"] for n in chr1.get_neighbors(gene)] == ["transcript"]
-    assert pg.Grove.deserialize(all_path).size() == 3
+    assert pg.Grove.deserialize(all_path).size() == 1
 
     assert resources.grove_index("_mini")[1] == all_path  # second call: cache hit, no rebuild
 
 
 def test_load_grove_returns_whole_and_self_heals(monkeypatch, tmp_path) -> None:
     sha = _register(monkeypatch, tmp_path)
-    assert resources.load_grove("_mini").size() == 3      # whole-genome grove
+    assert resources.load_grove("_mini").size() == 1      # whole-genome grove (transcript+exon external)
 
     _all_gg(tmp_path, sha).write_bytes(b"not a grove")    # corrupt the cached index
-    assert resources.load_grove("_mini").size() == 3      # self-heals: rebuild rather than crash
+    assert resources.load_grove("_mini").size() == 1      # self-heals: rebuild rather than crash

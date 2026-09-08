@@ -18,6 +18,15 @@ from pathlib import Path
 DEFAULT_MODEL = "claude-opus-4-8"
 
 _SYSTEM_MD = Path(__file__).with_name("prompts") / "system.md"
+
+#: Ways a model spells "no biosample" instead of omitting the line as system.md asks. Normalised
+#: to "" so the host doesn't hand a placeholder to the ENCODE catalog. This is deliberately
+#: permissive: canopy is meant to be model-agnostic, and treating one vendor's phrasing as the
+#: only valid one would score every other model down for a formatting habit, not a capability.
+_NO_COHORT = frozenset((
+    "", "none", "n/a", "na", "null", "nil", "-", "--",
+    "unspecified", "not specified", "not applicable",
+))
 # The system prompt's runtime-injected datasets block (the TODO placeholder).
 _RESOURCES_HEADING = "## Available resources"
 
@@ -35,15 +44,21 @@ def build_system_prompt(resources_block: str) -> str:
     return f"{head}{_RESOURCES_HEADING}\n\n{resources_block.strip()}\n"
 
 
-def generate_query(question: str, system_prompt: str, *, model: str = DEFAULT_MODEL):
+def generate_query(question: str, system_prompt: str, *, model: str = DEFAULT_MODEL, on_usage=None):
     """Translate ``question`` into ``pygenogrove`` Python via Claude.
 
-    Returns ``(cohort, targets, code)``: ``cohort`` is the biosample/cell-line the model read
-    from the question (``""`` if none named; the host resolves it against the ENCODE catalog),
-    ``targets`` is the declared enhancer targets — ``{"gene": ...}`` / ``{"region": ...}`` the
-    host resolves to the ``ENHANCERS`` it injects before running ``code`` (empty for questions
-    with no regulatory layer). ``code`` is the generated Python. The caller runs it through the
+    Returns ``(cohort, targets, code)``: ``cohort`` is the biosample/cell-line(s) the model read
+    from the question (``""`` if none named; ``;``-separated if several; the host resolves it
+    against the ENCODE catalog and attaches those cohorts into the grove before running
+    ``code``), ``targets`` is the declared enhancer targets — ``{"gene": ...}`` /
+    ``{"region": ...}`` — whose presence marks the question as regulatory (empty otherwise).
+    ``code`` is the generated Python. The caller runs it through the
     sandbox; nothing is executed here. Raises ``RuntimeError`` if the model declines.
+
+    ``on_usage``, if given, is called with the response's ``usage`` object before parsing — a
+    side channel for cost accounting (a benchmark harness, not part of the package) that keeps the return shape stable for
+    ``cli``/``serve``, which don't care. A callback rather than module state because ``serve``
+    answers questions on multiple threads.
     """
     import anthropic  # lazy: keeps the module importable without the SDK/key
 
@@ -55,6 +70,8 @@ def generate_query(question: str, system_prompt: str, *, model: str = DEFAULT_MO
         system=system_prompt,
         messages=[{"role": "user", "content": question}],
     )
+    if on_usage is not None:
+        on_usage(response.usage)
     if response.stop_reason == "refusal":
         raise RuntimeError("the model declined to answer this question")
     text = "".join(b.text for b in response.content if b.type == "text")
@@ -70,9 +87,14 @@ def parse_targets_and_code(text: str):
     import json
 
     cohort = ""
-    mc = re.search(r"^\s*COHORT:\s*(.+?)\s*$", text, re.MULTILINE)
+    # Horizontal whitespace only: `\s` matches newlines, so `COHORT:\s*(.+?)` would step over a
+    # bare `COHORT:` line (the correct declaration for a question naming no biosample) and capture
+    # the *following* line — reading the cohort as "TARGETS:" and sending that to the catalog.
+    mc = re.search(r"^[ \t]*COHORT:[ \t]*(.+?)[ \t]*$", text, re.MULTILINE)
     if mc:
-        cohort = mc.group(1).strip().strip("\"'")
+        cohort = mc.group(1).strip().strip("\"'").strip("()").strip()
+        if cohort.lower() in _NO_COHORT:
+            cohort = ""
 
     targets = []
     mt = re.search(r"^\s*TARGETS:\s*(\[.*?\])\s*$", text, re.MULTILINE | re.DOTALL)

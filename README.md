@@ -48,7 +48,7 @@ $ env CMAKE_PREFIX_PATH=/opt/homebrew \
       CMAKE_ARGS="-DCMAKE_PREFIX_PATH=/opt/homebrew/opt/htslib" uv sync
 ```
 
-Then fetch the data once (a pinned ~109 MB grove) so the first question is instant:
+Then fetch the data once (a pinned ~105 MB grove) so the first question is instant:
 
 ```console
 $ uv run canopy --init
@@ -84,12 +84,29 @@ $ uv run canopy serve
 One grove, queried through one handle, holds three layers:
 
 - **Gene structure** — GENCODE v50: genes, transcripts and exons, with `contains` and
-  `first_exon`/`next` splice-chain edges, and CDS ranges on each exon.
+  `first_exon`/`next` splice-chain edges, and CDS ranges on each exon. Only genes are
+  in the spatial index; transcripts and exons are reached by walking those edges.
 - **Candidate regulatory elements** — the ENCODE cCRE registry (V4, 2,348,854 elements),
   typed as Sequence Ontology `regulatory_region` with the evidence-based class (`PLS`,
   `pELS`, `dELS`, …) in the payload. A single `intersect` returns genes *and* cCREs.
 - **Enhancer→gene links** — ENCODE-rE2G predictions across 369 biosamples. These are
-  cohort-specific, so they are resolved per question rather than shipped in the grove.
+  cohort-specific, so the declared cohort's links are attached into the grove per
+  question, as enhancer nodes with `regulates`/`regulated_by` edges carrying the score.
+
+A fourth layer is in the package but not yet reachable from a question:
+
+- **Structural variants** — per-sample breakpoint edges (`layers/sv.py`): each SV is one
+  `breakpoint_edge` between the two backbone nodes its breakends fall in, the containing
+  gene or, outside every gene, a 1 Mb bin created on demand. Genes are never cut. PCAWG
+  consensus calls (ICGC + TCGA, open access, lifted to GRCh38) are pinned as the source.
+  Attaching a sample to the grove works and is tested; selecting a sample from a question
+  is not wired up yet.
+  Edges retain the original caller label as `source_svclass` and normalize inversion
+  subtypes to `svclass="INV"`. Those classes describe the original hg19 PCAWG call;
+  `junction_class` separately describes the GRCh38 junction geometry, which can differ
+  after liftover. Junction geometry does not establish copy-number change or diagnose
+  chromothripsis/chromoplexy. The pinned PCAWG calls contain no insertions, although the
+  attachment API supports insertion payloads.
 
 Enhancer answers carry a `ccre_overlap` list rather than a single class: most rE2G
 windows span several cCREs, and about a third span cCREs of differing classes, so

@@ -9,11 +9,11 @@ of truth for "what data exists and how the query code sees it" (``docs/showcase-
 
 from __future__ import annotations
 
-from genogrove_canopy.layers import ccres, enhancers
+from genogrove_canopy.layers import ccres, enhancers, sv
 from genogrove_canopy.layers._base import Layer
 
 # One entry per layer module. Order is the order shown to the agent.
-REGISTRY: dict[str, Layer] = {m.LAYER.name: m.LAYER for m in (ccres, enhancers)}
+REGISTRY: dict[str, Layer] = {m.LAYER.name: m.LAYER for m in (ccres, enhancers, sv)}
 
 
 def catalogue_block(names: list[str] | None = None) -> str:
@@ -27,4 +27,4 @@ def catalogue_block(names: list[str] | None = None) -> str:
     )
 
 
-__all__ = ["REGISTRY", "Layer", "catalogue_block", "ccres", "enhancers"]
+__all__ = ["REGISTRY", "Layer", "catalogue_block", "ccres", "enhancers", "sv"]

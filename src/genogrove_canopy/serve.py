@@ -39,12 +39,13 @@ class _Grove:
     """The plain-GENCODE grove made runnable: system prompt, code preamble, and warm worker.
 
     Cohort-independent now — the grove is GENCODE structure only, so there's exactly one, built
-    once and reused across questions. Enhancers are resolved per question and injected as
-    ``ENHANCERS`` (see :func:`_pipeline`), not baked into the grove.
+    once and reused across questions. Enhancers are resolved per question and
+    attached into ``GROVE`` per question (see :func:`_pipeline`), not baked into the grove.
     """
 
     def __init__(self, model: str) -> None:
         block, self.preamble, data_paths = _grove_context()
+        self.gg = data_paths[0]
         self.system_prompt = llm.build_system_prompt(block)
         self.model = model
         self.worker = sandbox.Worker(
@@ -74,9 +75,9 @@ def _serve_cohorts(cohort_override: str, cohort_hint: str):
     Returns ``({name: accessions}, note_or_None)``; no catalog match → ``({}, note)``."""
     if cohort_override:
         return _resolve_cohorts([cohort_override]), None
-    if cohort_hint:
+    if cohort_hint:  # `;`-separated, see cli._resolve_query_cohorts
         try:
-            return _resolve_cohorts([cohort_hint]), None
+            return _resolve_cohorts([c for c in map(str.strip, cohort_hint.split(";")) if c]), None
         except SystemExit:
             return {}, f"no cohort matched {cohort_hint!r} — no enhancers loaded"
     return _resolve_cohorts([DEFAULT_COHORT]), "default"
@@ -105,11 +106,12 @@ def _pipeline(question: str, cohort: str, model: str, emit) -> dict:
         note = None if why == "default" else why
         cohort_ids = _cohort_ids(cohorts)
         if cohort_ids:
-            emit("step", f"Fetching enhancers for cohort(s) {'; '.join(cohorts)}")
-            records = enhancers.fetch_for_targets(targets, cohort_ids)
-            if records:
-                enh_pre = enhancers.preamble(records)
-                note = f"{len(records)} enhancer links from {'; '.join(cohorts)}" + (
+            emit("step", f"Attaching enhancers for cohort(s) {'; '.join(cohorts)}")
+            cohort_links = {cid: str(enhancers.links_file(cid))
+                            for cid in cohort_ids if enhancers.ensure_index(cid)}
+            if cohort_links:
+                enh_pre = enhancers.preamble(grove.gg, cohort_links)
+                note = f"enhancers attached from {'; '.join(cohorts)}" + (
                     " (default)" if why == "default" else "")
 
     emit("step", "Running the query over the grove")

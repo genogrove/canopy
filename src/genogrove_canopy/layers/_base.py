@@ -24,7 +24,10 @@ class Layer:
     ``kind``   — taxonomy: ``node`` (new intervals) | ``edge`` (relations) | ``payload`` (values).
     ``when``   — one line: when a question implicates this layer (drives §6 selection).
     ``schema`` — the node/edge ``type`` + payload keys the generated query code will see.
-    ``attach`` — ``(grove, records) -> int``: insert the fetched records; returns the count.
+    ``attach`` — the layer's host-side entry point that materialises its data on a mutable
+                 grove. The signature is layer-specific (``sv.attach(grove, records)``,
+                 ``enhancers.attach_links(grove, path, cohort, nodes)``); nothing dispatches
+                 through it generically — it is here so each layer names its one loader.
     """
 
     name: str

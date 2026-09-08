@@ -27,7 +27,9 @@ def _write(tmp_path):
 def test_type_filter_keeps_only_genes(tmp_path) -> None:
     p = _write(tmp_path)
     assert load_gff(p, types={"gene"}).size() == 2  # the exon is filtered out
-    assert load_gff(p).size() == 3
+    # size() counts indexed keys only; the exon is external (see gff.py module docstring)
+    assert load_gff(p).size() == 2
+    assert load_gff(p).vertex_count() == 3
 
 
 def test_intersect_finds_overlapping_gene(tmp_path) -> None:
@@ -116,18 +118,22 @@ def test_cds_folded_into_exons(tmp_path) -> None:
     p.write_text(CODING)
     g = load_gff(p)
 
-    everything = list(g.intersect(pg.GenomicCoordinate("*", 0, 5000), "chr1"))
-    # CDS and UTR are folded/derived, never inserted as keys
-    assert {k.data["type"] for k in everything} == {"gene", "transcript", "exon"}
+    indexed = list(g.intersect(pg.GenomicCoordinate("*", 0, 5000), "chr1"))
+    # CDS and UTR are folded/derived, never inserted as keys; transcript and exon are both
+    # external now, only gene is indexed
+    assert {k.data["type"] for k in indexed} == {"gene"}
 
-    tx = next(k for k in everything if k.data["type"] == "transcript")
+    gene = next(k for k in indexed if k.data["type"] == "gene")
+    tx = next(iter(g.get_neighbors(gene)))     # gene -> transcript (external key)
     assert (tx.data["cds_start"], tx.data["cds_end"]) == (1099, 2899)  # CDS span, 0-based closed
 
     # The coding sub-range is per (exon, transcript) — an exon key is shared by every isoform
     # that uses it, coding in one and UTR in another — so it is derived, never stored.
     from genogrove_canopy.gff import exon_cds
 
-    exons = {k.value.start: k for k in everything if k.data["type"] == "exon"}
+    e1 = next(iter(g.get_neighbors(tx)))       # transcript -> first_exon (external key)
+    e2 = next(iter(g.get_neighbors(e1)))       # first_exon -> next
+    exons = {k.value.start: k for k in (e1, e2)}
     assert "cds" not in exons[999].data                       # not on the exon payload
     assert exon_cds(exons[999], tx) == [1099, 1199]           # 999..1098 is 5' UTR (derived)
     assert exon_cds(exons[2799], tx) == [2799, 2899]          # 2900..2999 is 3' UTR (derived)
@@ -168,11 +174,16 @@ def test_splice_chain_is_strand_aware(tmp_path) -> None:
     p = tmp_path / "minus.gff3"
     p.write_text(MINUS)
     g = load_gff(p)
-    # 5'->3' on the '-' strand runs high coordinate -> low: hi (299..399) -> lo (99..199).
-    hi = next(
-        k for k in g.intersect(pg.GenomicCoordinate("*", 349, 349), "chr3")
-        if k.data["type"] == "exon"
+    # Transcript and exon are both external keys now — reach the transcript via the
+    # (indexed) gene, then its first exon via the transcript, never via intersect().
+    gene = next(
+        k for k in g.intersect(pg.GenomicCoordinate("*", 150, 150), "chr3")
+        if k.data["type"] == "gene"
     )
+    tx = next(iter(g.get_neighbors(gene)))
+    # 5'->3' on the '-' strand runs high coordinate -> low: hi (299..399) -> lo (99..199).
+    hi = next(iter(g.get_neighbors(tx)))
+    assert (hi.value.start, hi.value.end) == (299, 399)
     assert [(n.value.start, n.value.end) for n in g.get_neighbors(hi)] == [(99, 199)]
 
 
@@ -229,12 +240,16 @@ def test_biotype_is_the_features_own(tmp_path) -> None:
     p.write_text(NMD)
 
     for g in (load_gff(p), build_grove(str(p))):
-        by_type = {k.data["type"]: k.data
-                   for k in g.intersect(pg.GenomicCoordinate("*", 1000, 1100), "chr1")}
-        assert by_type["transcript"]["biotype"] == "nonsense_mediated_decay"
-        assert by_type["gene"]["biotype"] == "protein_coding"   # still there, one edge up
-        assert "biotype" not in by_type["exon"]                 # exons have none of their own
-        assert by_type["exon"]["name"] == "AAA"                 # but still name the gene
+        indexed = list(g.intersect(pg.GenomicCoordinate("*", 1000, 1100), "chr1"))
+        gene = next(k for k in indexed if k.data["type"] == "gene")
+        assert gene.data["biotype"] == "protein_coding"
+
+        tx = next(iter(g.get_neighbors(gene)))                  # transcript is external, reached by edge
+        assert tx.data["biotype"] == "nonsense_mediated_decay"
+
+        exon = next(iter(g.get_neighbors(tx)))                  # exon is external, reached by edge
+        assert "biotype" not in exon.data                       # exons have none of their own
+        assert exon.data["name"] == "AAA"                       # but still name the gene
 
 
 # Two isoforms of one gene sharing a middle exon, plus a DIFFERENT gene whose exon happens to
@@ -278,15 +293,24 @@ def test_exons_dedup_per_gene_and_chains_stay_separate(tmp_path) -> None:
     p.write_text(SHARED)
 
     for g in (load_gff(p), build_grove(str(p))):
-        at2000 = [k for k in g.intersect(pg.GenomicCoordinate("*", 2050, 2050), "chr1")
-                  if k.data["type"] == "exon"]
-        assert len(at2000) == 2                                    # 3 GFF lines -> 2 keys
-        assert {k.data["name"] for k in at2000} == {"AAA", "BBB"}   # merged within, not across
-
-        txs = {k.data["id"]: k for k in g.intersect(pg.GenomicCoordinate("*", 2050, 2050), "chr1")
-               if k.data["type"] == "transcript"}
+        genes = [k for k in g.intersect(pg.GenomicCoordinate("*", 2050, 2050), "chr1")
+                 if k.data["type"] == "gene"]
+        txs = {tx.data["id"]: tx for gene in genes for tx in g.get_neighbors(gene)}
         # t1 has 3 exons, t2 has 2 — and both run through the SAME shared key at 1999..2099
-        assert [(e.value.start, e.value.end) for e in _walk(g, txs["t1"])] == [
+        w1, w2, w3 = _walk(g, txs["t1"]), _walk(g, txs["t2"]), _walk(g, txs["t3"])
+        assert [(e.value.start, e.value.end) for e in w1] == [
             (999, 1099), (1999, 2099), (2999, 3099)]
-        assert [(e.value.start, e.value.end) for e in _walk(g, txs["t2"])] == [
+        assert [(e.value.start, e.value.end) for e in w2] == [
             (1999, 2099), (2999, 3099)]
+        # t1/t2 share the middle exon (one key, gene G1) — the walks land on the identical key.
+        # `is` (not `==`) proves it's the same node, not just an equal-valued one.
+        assert w1[1] is w2[0]
+        assert w1[1].data["name"] == "AAA"
+
+        # t3 (gene G2) has an exon at the IDENTICAL interval — a different gene, a different key.
+        # `Key` equality is value-based (pygenogrove#87): two keys with the same coordinates
+        # compare equal even when they're different graph nodes, so distinctness has to be
+        # checked with `is not` (object identity), not `!=`.
+        assert [(e.value.start, e.value.end) for e in w3] == [(1999, 2099)]
+        assert w3[0] is not w1[1]
+        assert w3[0].data["name"] == "BBB"                          # merged within, not across

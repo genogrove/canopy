@@ -1,9 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Host-side enhancer layer: target parsing, gene→TSS resolution, the ENHANCERS injection,
-and (when the index bundle is present) the tabix lookups. The generated query code can't read
-the index — the sandbox allowlist blocks file I/O — so these run host-side only."""
-import json
-
+"""Enhancer layer: declaration parsing, the sandbox preamble (attach-into-grove, memoisation,
+the read-only view), `attach_links` against real bindings, and the pinned index bookkeeping."""
 import pytest
 
 from genogrove_canopy import llm
@@ -47,33 +44,28 @@ def test_declarations_never_leak_into_code(text):
     assert "COHORT" not in code and "TARGETS" not in code and code.strip() == "p()"
 
 
-def test_resolve_gene():
-    # gene_tss.tsv.gz ships in the package, so this works without the index
-    hit = enhancers.resolve_gene("MYC")
-    assert hit == ("ENSG00000136997", "chr8", 127735434)
-    assert enhancers.resolve_gene("NOT_A_GENE") is None
+def test_preamble_no_cohorts_opens_lazily():
+    pre = enhancers.preamble("/tmp/x.gg")
+    assert pre == ('import pygenogrove as pg\n'
+                    'GROVE = pg.GroveView.open("/tmp/x.gg")\nCOHORTS = []\n'
+                    "globals().pop('_CANOPY_STATE', None)\n")
+    compile(pre, "<preamble>", "exec")
 
 
-def test_preamble_roundtrips():
-    records = [{"chrom": "chr8", "start": "1", "class": "genic", "score_max": "0.9"}]
-    pre = enhancers.preamble(records)
-    assert pre.startswith("ENHANCERS = json.loads(")
-    loaded = eval(pre.split("=", 1)[1].strip(), {"json": json})  # json is on the sandbox allowlist
-    assert loaded == records
+def test_preamble_with_cohorts_attaches_each_onto_one_grove():
+    pre = enhancers.preamble(
+        "/tmp/x.gg", {"EFO:0005726": "/tmp/a.tsv", "EFO:0009318": "/tmp/b.tsv"})
+    assert 'grove=pg.Grove.deserialize("/tmp/x.gg")' in pre
+    assert '[["EFO:0005726", "/tmp/a.tsv"], ["EFO:0009318", "/tmp/b.tsv"]]' in pre
+    assert "attach_links(_grove, _links, _c, _state['nodes'])" in pre
+    assert 'COHORTS = ["EFO:0005726", "EFO:0009318"]' in pre
+    assert "GROVE = _readonly(_grove)" in pre
+    assert "_CANOPY_STATE" in pre
+    compile(pre, "<preamble>", "exec")
 
 
 @pytest.mark.skipif(not enhancers.index_present(FLAGSHIP),
                     reason="rE2G index bundle not present (download/build it first)")
-def test_fetch_for_targets_gene_and_region():
-    recs = enhancers.fetch_for_targets(
-        [{"gene": "MYC"}, {"region": "chr8:127700000-127740000"}], [FLAGSHIP])
-    assert recs
-    assert all("target_gene" in r and "score_max" in r for r in recs)
-    # deduped across the two overlapping targets
-    keys = {(r["chrom"], r["start"], r["end"], r["target_gene"], r["cohort"]) for r in recs}
-    assert len(keys) == len(recs)
-
-
 def test_index_present_requires_every_file_not_just_the_tables(tmp_path, monkeypatch):
     """A cohort with tables but no tabix indexes is *not* ready.
 
@@ -95,3 +87,134 @@ def test_index_present_requires_every_file_not_just_the_tables(tmp_path, monkeyp
     for name in names:
         (tmp_path / name).write_bytes(b"")
     assert enhancers.index_present("EFO:0005726")
+
+
+def test_attach_links_merges_a_second_cohort_onto_one_node_and_edge(tmp_path):
+    """The same element→gene link in two cohorts is one enhancer node and one `regulates` edge
+    whose `byCohort` carries both — not a second node at the same interval with a parallel edge,
+    which is what two plain `add_edge` calls (and a per-call node cache) produced."""
+    pg = pytest.importorskip("pygenogrove")
+
+    g = pg.Grove(order=100)
+    g.insert("chr1", pg.GenomicCoordinate("+", 999, 1999), {"type": "gene", "id": "ENSG1.2"})
+    a, b = tmp_path / "a.tsv", tmp_path / "b.tsv"
+    a.write_text("chr1\t100\t200\tintergenic\tENSG1\tchr1\t1000\t1\t0.5\t0.9\n")
+    b.write_text("chr1\t100\t200\tintergenic\tENSG1\tchr1\t1000\t2\t0.4\t0.7\n"
+                 "chr1\t300\t400\tintergenic\tENSG1\tchr1\t1000\t1\t0.1\t0.2\n")
+    nodes = {}  # shared across cohorts, as the preamble does
+    assert enhancers.attach_links(g, a, "C1", nodes) == (1, 1, 0)
+    assert enhancers.attach_links(g, b, "C2", nodes) == (2, 2, 0)
+
+    gene = next(k for k in g.intersect(pg.GenomicCoordinate("*", 1500, 1500), "chr1"))
+    enh = [k for k in g.intersect(pg.GenomicCoordinate("*", 150, 150), "chr1")
+           if k.data.get("type") == "enhancer"]
+    assert len(enh) == 1
+    edges = [m for _, m in g.get_edge_list(enh[0])]
+    assert edges == [{"rel": "regulates", "byCohort": {
+        "C1": {"score_max": 0.9, "score_mean": 0.5, "n_rep": 1},
+        "C2": {"score_max": 0.7, "score_mean": 0.4, "n_rep": 2}}}]
+    back = [m for t, m in g.get_edge_list(gene) if t.value.start == 100]
+    assert len(back) == 1 and back[0]["byCohort"].keys() == {"C1", "C2"}
+    assert len(g.get_neighbors_if(gene, lambda m: m and m.get("rel") == "regulated_by")) == 2
+
+
+def _run_preamble(cohort_links, state, events):
+    """Execute the cohort preamble against stub bindings; returns the namespace generated code
+    would see. `events` records deserialize / attach / clear calls in order."""
+
+    class _Grove:
+        n = 1
+        def size(self):
+            return self.n
+        def __len__(self):
+            return self.n
+
+    class _GroveView:  # what the sandbox's read-only handle exposes
+        def size(self): ...
+
+    pg = type("pg", (), {
+        "Grove": type("G", (), {"deserialize": staticmethod(
+            lambda p: events.append("deser") or _Grove())}),
+        "GroveView": _GroveView})
+    pre = enhancers.preamble("/tmp/x.gg", cohort_links)
+    body = pre.split("import pygenogrove as pg\n", 1)[1].replace(
+        "        attach_links(_grove, _links, _c, _state['nodes'])",
+        "        events.append(('attach', _c, id(_state['nodes'])))")
+    g = {"_CANOPY_STATE": state, "__builtins__": __builtins__, "pg": pg, "events": events}
+    exec(body, g)
+    return g
+
+
+def test_preamble_grows_the_warm_grove_one_cohort_at_a_time():
+    """Cohorts asked about later attach onto the memoised grove — never a rebuild — sharing one
+    node cache so `attach_links` merges them; a question whose cohorts are all present attaches
+    nothing; a different grove path drops the old state before deserializing the new grove."""
+
+    class _State(dict):
+        def clear(self):
+            events.append("clear")
+            super().clear()
+
+    events, state = [], _State()
+    _run_preamble({"C": "/tmp/c.tsv"}, state, events)
+    assert events == ["clear", "deser", ("attach", "C", id(state["nodes"]))]
+    assert state["cohorts"] == {"C"}
+
+    events.clear()
+    g = _run_preamble({"D": "/tmp/d.tsv", "C": "/tmp/c.tsv"}, state, events)
+    assert events == [("attach", "D", id(state["nodes"]))]     # same grove, same cache, D only
+    assert state["cohorts"] == {"C", "D"} and g["COHORTS"] == ["C", "D"]
+
+    events.clear()
+    _run_preamble({"C": "/tmp/c.tsv"}, state, events)
+    assert events == []                                          # all present: pure memo hit
+
+    events.clear()
+    state["gg"] = "/tmp/other.gg"                                # a different grove path
+    _run_preamble({"C": "/tmp/c.tsv"}, state, events)
+    assert events[:2] == ["clear", "deser"]                      # stale entry dropped first
+
+
+def test_preamble_hides_the_worker_state_and_hands_out_a_read_only_view():
+    """The preamble removes its scratch names from the namespace and binds `GROVE` to a view
+    that forwards query methods only — so generated code can neither swap the memoised grove
+    nor insert into it and change the next question's answer."""
+    state, events = {}, []
+    g = _run_preamble({"C": "/tmp/c.tsv"}, state, events)
+    assert not {"_CANOPY_STATE", "_state", "_grove", "_c", "_links", "_readonly", "_n"} & g.keys()
+    view = g["GROVE"]
+    assert view.size() == 1 and len(view) == 1               # reads forward
+    with pytest.raises(AttributeError):
+        view.insert("chr1", None, {})                        # mutators do not
+    assert state["grove"].size() == 1                        # ...so the memoised grove is untouched
+
+
+def test_links_file_builds_the_plain_table_the_sandbox_reads(tmp_path, monkeypatch):
+    """`links_file` turns a cohort's gzipped byEnhancer index into the plain TSV the sandbox is
+    granted: exactly the ten columns `attach_links` reads, the Ensembl id unversioned, the target
+    TSS filled in from the bundled gene table, rows whose target is unknown dropped here (the
+    sandbox could not resolve them anyway), and the result cached."""
+    import gzip
+
+    cohort = "EFO:0000001"
+    monkeypatch.setattr(enhancers, "INDEX_DIR", tmp_path / "idx")
+    monkeypatch.setattr(enhancers, "LINKS_DIR", tmp_path / "links")
+    monkeypatch.setattr(enhancers, "ensure_index", lambda c: True)
+    src = enhancers.INDEX_DIR / f"{enhancers._slug(cohort)}.byEnhancer.tsv.gz"
+    src.parent.mkdir()
+    row = lambda ens, start: "\t".join(  # noqa: E731 — the 11 index columns, in _FIELDS order
+        ("chr8", str(start), str(start + 500), "MYC", ens, "intergenic", "FALSE",
+         cohort, "2", "0.4", "0.9")) + "\n"
+    with gzip.open(src, "wt") as fh:
+        fh.write(row("ENSG00000136997.20", 100) + row("ENSG99999999", 200) + row("ENSG00000136997", 300))
+
+    dest = enhancers.links_file(cohort)
+    rows = [ln.split("\t") for ln in dest.read_text().splitlines()]
+    assert dest == enhancers.LINKS_DIR / f"{enhancers._slug(cohort)}.links.tsv"
+    assert [r[1] for r in rows] == ["100", "300"]                    # the unknown target is dropped
+    assert rows[0] == ["chr8", "100", "600", "intergenic", "ENSG00000136997",
+                       "chr8", "127735434", "2", "0.4", "0.9"]         # unversioned id, TSS filled in
+    assert not list(enhancers.LINKS_DIR.glob("*.tmp"))               # written atomically
+
+    src.unlink()
+    assert enhancers.links_file(cohort) == dest                      # cached: the index is not reread

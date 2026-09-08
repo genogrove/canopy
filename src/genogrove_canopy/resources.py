@@ -55,9 +55,9 @@ class BuildPin:
 # four are asserted against each other by tests/test_resources_pins.py; bump them in one commit.
 PYGENOGROVE = BuildPin(
     name="pygenogrove",
-    version="0.7.4",
-    git_rev="f803f01f4a1f8ff1a6482461144d576b599fc481",
-    git_tag="v0.7.4",
+    version="0.9.0",
+    git_rev="3846c5de0084b08e91a724eee5021656d6148290",
+    git_tag="v0.9.0",
 )
 
 
@@ -147,11 +147,24 @@ RESOURCES: dict[str, Resource] = {
         filename="gencode.v50.annotation.sorted.gff3.gz",
         index_url="https://zenodo.org/api/records/21123308/files/gencode.v50.annotation.sorted.gff3.gz.tbi/content",
         index_sha256="52020642c93f01c24488d98b446d705a655d31ea39339fad36cced3b9cc9480a",
-        # Prebuilt **unified** grove (109 MB): the GENCODE backbone — gene/transcript/exon with
-        # contains/first_exon/next edges, exons deduped per gene, chain edges carrying `tx` — PLUS
-        # the 2,348,854 ENCODE cCREs already in it as `type:"regulatory_region"`,
-        # `source:"ENCODE-SCREEN"` nodes. 4,204,157 keys / 5,722,676 edges, built in one pass from
-        # the unified GFF under pygenogrove 0.7.4.
+        # Prebuilt **unified** grove (105 MB): the GENCODE backbone — indexed types are exactly
+        # `{gene, regulatory_region}`, verified directly (transcript is EXTERNAL, like exon:
+        # reach one via its gene's `contains` edge, never via intersect(); coding-structure
+        # annotations, including the selenocysteine-readthrough analogue of `stop_codon`, are
+        # dropped like every other UTR/codon type, never indexed) — PLUS the 2,348,854 ENCODE
+        # cCREs as `type:"regulatory_region"`, `source:"ENCODE-SCREEN"` nodes. No SV-layer-
+        # specific structure baked in — `layers/sv.py` computes its own segment/gap coverage on
+        # demand, per session, into an already-deserialized working copy instead (verified safe:
+        # inserting into a deserialized grove does not corrupt it). 2,427,587 indexed keys /
+        # 4,204,002 keys total (indexed + external), built in one pass via `gff.load_gff` +
+        # `layers.ccres.attach`.
+        #
+        # Rebuilt (content unchanged, only the on-disk format changed) under the actually-pinned
+        # pygenogrove 0.9.0 — the previous pin was built under a stale local 0.7.4 install despite
+        # pyproject.toml already naming 0.9.0, so it silently shipped an old serialization format
+        # (0.2) that 0.9.0's `GroveView.open`/`Grove.deserialize` reject outright ("bad magic (not
+        # a format 0.3 grove stream)"). Round-tripped and EGFR-region smoke-checked against the new
+        # build before re-pinning.
         #
         # Because the layer ships inside the grove, nothing resolves `encode.ccre.v4` at query time
         # and there is no local bake — the old deserialize→insert→reserialize step (and the
@@ -159,13 +172,13 @@ RESOURCES: dict[str, Resource] = {
         #
         # The URL pins an immutable HF **commit**, not `resolve/main`: a branch ref is movable and
         # would defeat the Level 2 guarantee. Verified end-to-end through `_download` (302 → 200,
-        # 109,083,063 bytes, sha256 match).
+        # 104,994,275 bytes, sha256 match).
         grove_url=(
             "https://huggingface.co/datasets/genogrove/canopy/resolve/"
-            "8feafeb7f1ae2587a337a399e0416f1c726453cf"
+            "826d9f99599b25a81f70b30f592d8ba89d3d0c20"
             "/groves/gencode.v50+ccre.v4.grove-model.gg"
         ),
-        grove_sha256="f1c53fe2d535eaaf698e159e4943e9195bbd36407a630b0ee4abf59c87c8e4e0",
+        grove_sha256="1b3d12b23c8d218ed2c83c38f3ba1e5c7dbad2cbd1d668874e6c4725b0ed51a9",
         grove_layers=("ENCODE cCRE registry (V4, GRCh38)",),
         grove_contents="GENCODE human v50 + ENCODE cCREs V4",
         description="GENCODE v50 comprehensive gene annotation, GRCh38 (GFF3, sorted + bgzip + tabix).",
@@ -198,6 +211,64 @@ RESOURCES: dict[str, Resource] = {
         index_sha256="485e642dd8f0fb97ff693157a54ef47e881cb31ee8dcfca54bea73bfb64721cd",
         description="ENCODE Registry of cCREs V4, GRCh38 (2,348,854 elements; Nature 2026, "
                     "doi:10.1038/s41586-025-09909-9).",
+    ),
+    "pcawg.sv.icgc": Resource(
+        name="pcawg.sv.icgc",
+        # PCAWG consensus structural-variant calls (v1.6), ICGC portion. Open access, no DACO —
+        # confirmed against the source's own README (open/controlled split lives at the file
+        # level, this one is public). One BEDPE per sample inside the tarball
+        # (`icgc/open/<aliquot_id>.pcawg_consensus_1.6.161116.somatic.sv.bedpe.gz`), 1,926 samples.
+        #
+        # PCAWG's own release is hg19 only — no official hg38 SV release exists — so this is a
+        # *derived* artifact: lifted to GRCh38 by `tools/liftover_pcawg_sv.py` from the pinned
+        # `pcawg.sv.icgc.hg19` original (build-time step, not resolved on a user's machine; same
+        # shape as `encode.ccre.v4`) and re-hosted, since there's no upstream hg38 original. 179,905/179,973 SVs lifted (0.04%
+        # dropped — didn't lift cleanly). Chrom columns normalized to "chr"-prefixed to match the
+        # GENCODE backbone. Re-lifted once with the strand of reverse-mapped breakends corrected
+        # (778 records); the dataset's `layers/genomic/` layout starts with this commit.
+        url=(
+            "https://huggingface.co/datasets/genogrove/canopy/resolve/"
+            "b3abfea82ad29de7dbadda47baeec5a99c4bce77"
+            "/layers/genomic/pcawg-sv/final_consensus_sv_bedpe_passonly.icgc.public.hg38.tgz"
+        ),
+        sha256="b06722c0ed2f7ad22085d2a3630b3711516b7d071313dd4a25b66fd63e1cacd6",
+        filename="final_consensus_sv_bedpe_passonly.icgc.public.hg38.tgz",
+        description="PCAWG consensus SV calls (v1.6), ICGC portion, 1,926 samples, open access, "
+                    "lifted to GRCh38.",
+    ),
+    "pcawg.sv.tcga": Resource(
+        name="pcawg.sv.tcga",
+        # Same release, TCGA portion — 822 samples, same open/lifted-and-re-hosted shape.
+        # 129,215/129,273 SVs lifted (0.04% dropped).
+        url=(
+            "https://huggingface.co/datasets/genogrove/canopy/resolve/"
+            "b3abfea82ad29de7dbadda47baeec5a99c4bce77"
+            "/layers/genomic/pcawg-sv/final_consensus_sv_bedpe_passonly.tcga.public.hg38.tgz"
+        ),
+        sha256="d7c6fb040b518b8f590a685c7da1de372d4142b923b5da2da06ea8091ed8a5b6",
+        filename="final_consensus_sv_bedpe_passonly.tcga.public.hg38.tgz",
+        description="PCAWG consensus SV calls (v1.6), TCGA portion, 822 samples, open access, "
+                    "lifted to GRCh38.",
+    ),
+    # The hg19 ORIGINALS the two entries above were lifted from — build inputs for
+    # `tools/liftover_pcawg_sv.py`, never read at query time. Hosted on the ICGC 25K open
+    # bucket (S3-compatible, public read); the URL carries no version, so immutability rests on
+    # the sha256 here: a changed upstream file fails verification instead of lifting silently.
+    "pcawg.sv.icgc.hg19": Resource(
+        name="pcawg.sv.icgc.hg19",
+        url="https://object.genomeinformatics.org/icgc25k-open/PCAWG/consensus_sv/"
+            "final_consensus_sv_bedpe_passonly.icgc.public.tgz",
+        sha256="8aff040b21a3680629a364e3cfc57f42a235cc8d8aa3e1a14245f5e2c9d01079",
+        filename="final_consensus_sv_bedpe_passonly.icgc.public.tgz",
+        description="PCAWG consensus SV calls (v1.6), ICGC portion, hg19 original (liftover input).",
+    ),
+    "pcawg.sv.tcga.hg19": Resource(
+        name="pcawg.sv.tcga.hg19",
+        url="https://object.genomeinformatics.org/icgc25k-open/PCAWG/consensus_sv/"
+            "final_consensus_sv_bedpe_passonly.tcga.public.tgz",
+        sha256="3be5502baa2726142137ac83c234623ca215fb356b8645c63933ee516e5c94f6",
+        filename="final_consensus_sv_bedpe_passonly.tcga.public.tgz",
+        description="PCAWG consensus SV calls (v1.6), TCGA portion, hg19 original (liftover input).",
     ),
 }
 
@@ -357,7 +428,7 @@ def _all_grove_gg(name: str) -> Path:
 def ensure_all_grove(name: str) -> Path:
     """Cache the whole-genome grove (`.gg`) if absent, returning its path.
 
-    Prefers the **pinned prebuilt grove** (``grove_url``): a ~109 MB sha-verified download
+    Prefers the **pinned prebuilt grove** (``grove_url``): a ~105 MB sha-verified download
     (seconds) instead of a local build. Falls back to building from the annotation
     (``build_grove(region="")`` → serialize) — minutes, and only when the resource declares no
     ``grove_layers``, because a local build reads only the annotation and cannot reproduce them.
@@ -435,13 +506,27 @@ def grove_view(name: str):
 # rather than silently served. v2 = a feature's `biotype` is its own (transcript_type on a
 # transcript), exons carry none, and non-hierarchy types keep their column-9 attributes + `source`.
 # v3 = the pinned artifact is the **unified** grove (backbone + ENCODE cCREs in one build).
+# v4 = exons are external (graph-only) keys, not indexed in the B+ tree — reach one via its
+# transcript's first_exon/next chain, never via intersect().
+# v5 = transcripts are also external (reach via their gene's `contains` edge); only gene is
+# indexed among the GENCODE hierarchy.
+# v6 = v5 without the `intergenic_region` gap nodes it had briefly baked in for the SV layer;
+# the pinned artifact carries no layer-specific structure (see `layers/sv.py`).
+# v7 = `stop_codon_redefined_as_selenocysteine` (the selenocysteine-readthrough analogue of
+# `stop_codon`) is now dropped like every other coding-structure annotation, instead of falling
+# through to the generic foreign-layer path and getting indexed with its raw GENCODE attributes
+# — 155 stray nodes genome-wide, found by checking what the indexed `type`s actually were.
+# v8 = same content as v7, re-serialized under the pinned pygenogrove 0.9.0 (stream format 0.3).
+# The v7 artifact was written by a stale 0.7.4 install (format 0.2), which 0.9.0 rejects with
+# "bad magic" — and a cached copy is never re-fetched, so the only way to heal an install that
+# already held it is a new schema directory.
 #
 # The bump is load-bearing, not cosmetic: this value is part of the cache directory
 # (`_grove_dir`), but the rest of that key is the *annotation's* sha256 — which did not change when
 # `grove_url` was re-pinned. Without the bump, anyone holding a cached `_all.gg` from the old
 # GENCODE-only Zenodo artifact would keep being served it forever, since `ensure_all_grove` returns
 # early on an existing path and never re-checks the URL.
-_GROVE_SCHEMA = "3"
+_GROVE_SCHEMA = "8"
 
 
 def _grove_dir(name: str) -> Path:
@@ -533,7 +618,6 @@ def load_grove(name: str):
 # So a query's footprint = (biosamples it names) × (rows in the region it names).
 # --------------------------------------------------------------------------- #
 
-_ENCODE = "https://www.encodeproject.org"
 
 # The rE2G thresholded element-gene-links BED has ~56 columns (mostly model-internal
 # `.Feature` inputs); we keep only these, selected BY HEADER NAME — the file's own
@@ -541,10 +625,6 @@ _ENCODE = "https://www.encodeproject.org"
 # tail count/order varies by rE2G version. `class` is a positional label (col 5); `Score`
 # (col 56) is the model's calibrated enhancer→gene confidence. Everything else is either
 # derivable from the grove (distance, class) or a model input we don't store.
-_RE2G_KEEP = (
-    "chr", "start", "end", "class", "TargetGene", "TargetGeneEnsemblID",
-    "TargetGeneTSS", "isSelfPromoter", "Score",
-)
 
 # Catalog of all ENCODE-rE2G prediction annotations, generated by
 # tools/fetch_re2g_catalog.py (one row per biosample; ships with the package).
@@ -567,13 +647,6 @@ def re2g_catalog() -> list[dict[str, str]]:
 
     with _RE2G_CATALOG.open() as fh:
         return list(csv.DictReader(fh, delimiter="\t"))
-
-
-def re2g_accessions(biosample_term: str) -> list[str]:
-    """Annotation accessions for a biosample term (case-insensitive substring), e.g.
-    ``re2g_accessions("prostate")`` — the agent picks from these before fetching any data."""
-    t = biosample_term.lower()
-    return [e["accession"] for e in re2g_catalog() if t in e["biosample_term"].lower()]
 
 
 # Ontology-id prefix -> the query axis it represents (UBERON = anatomy/tissue, CL = cell
@@ -660,295 +733,3 @@ def re2g_cohorts() -> list[dict]:
     return sorted(groups.values(), key=lambda g: (-g["n_replicates"], g["name"]))
 
 
-def _re2g_edge_href(accession: str) -> str:
-    """Resolve an rE2G annotation to its thresholded element-gene-links BED download URL.
-
-    Picks the ENCODE-rE2G (not ABC) default file: ``preferred_default`` +
-    ``output_type == 'thresholded element gene links'``. Raises if none is found.
-    """
-    import json
-
-    url = f"{_ENCODE}/annotations/{accession}/?format=json"
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(req) as resp:  # noqa: S310 — fixed ENCODE host
-        data = json.load(resp)
-    for f in data.get("files", []):
-        if (f.get("output_type") == "thresholded element gene links"
-                and f.get("preferred_default") and f.get("file_format") == "bed"):
-            return _ENCODE + f["href"]
-    raise RuntimeError(f"no default thresholded rE2G BED found for {accession}")
-
-
-
-def _re2g_digest_path(accession: str) -> Path:
-    return _CACHE / "re2g" / f"{accession}.sha256"
-
-
-def _record_re2g_digest(accession: str, raw: Path) -> str:
-    """Record the sha256 of the rE2G BED that was actually fetched.
-
-    Unlike every other dataset, rE2G is resolved on demand from ENCODE with no pinned checksum
-    (`_download(..., "")`), so a rerun can silently receive different bytes. Pinning all 369
-    cohorts is a separate question; recording what *this* machine fetched costs one hash of a
-    ~12 MB file and makes the drift detectable after the fact instead of invisible.
-
-    Written beside the cached index and kept after the raw BED is discarded, so the provenance
-    outlives the file it describes.
-    """
-    digest = hashlib.sha256(raw.read_bytes()).hexdigest()
-    path = _re2g_digest_path(accession)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(digest, encoding="utf-8")
-    return digest
-
-
-def re2g_digest(accession: str) -> str:
-    """The sha256 recorded for ``accession``'s rE2G BED, or ``""`` if it was cached before
-    digests were recorded (or never fetched)."""
-    path = _re2g_digest_path(accession)
-    return path.read_text(encoding="utf-8").strip() if path.exists() else ""
-
-
-def re2g_provenance(accessions: Iterable[str]) -> dict[str, str]:
-    """``{accession: sha256}`` for the rE2G files behind a run — empty string where unknown.
-
-    The counterpart to ``build_manifest`` for the one layer that is not pinned: a result can
-    state exactly which bytes produced it even though nothing guaranteed them in advance.
-    """
-    return {a: re2g_digest(a) for a in accessions}
-
-
-def re2g_indexed(accession: str) -> Path:
-    """Download + bgzip + tabix-index a biosample's rE2G edge BED once; cached.
-
-    Fetches the whole (~12 MB) BED on first use — the region laziness is on the read
-    side (``re2g_edges``), not the download. ``RuntimeError`` if htslib is absent.
-    """
-    out = _CACHE / "re2g" / f"{accession}.bed.gz"
-    tbi = out.with_name(out.name + ".tbi")
-    if out.exists() and tbi.exists():
-        return out
-    for tool in ("bgzip", "tabix"):
-        if shutil.which(tool) is None:
-            raise RuntimeError(
-                f"{tool!r} not found — install htslib for rE2G region access "
-                "(e.g. `brew install htslib` / `apt install tabix`)"
-            )
-    from genogrove_canopy.log import say
-
-    say(f"Fetching ENCODE-rE2G {accession} — unpinned, verifying nothing")
-    raw = _download(_re2g_edge_href(accession), "", out.with_name("raw.bed.gz"))
-    digest = _record_re2g_digest(accession, raw)  # not pinned, so at least record what arrived
-    say(f"rE2G {accession}: sha256 {digest[:12]}… recorded (see canopy#20)")
-    tmp = out.with_name("indexed.tmp.bed.gz")
-    q = shlex.quote(str(raw))
-    # Comment/header ('#') lines first, then data sorted by (chrom, start) for tabix.
-    pipeline = (
-        f"{{ gzip -dc {q} | grep '^#' ; gzip -dc {q} | grep -v '^#' | sort -k1,1 -k2,2n ; }} "
-        f"| bgzip -c > {shlex.quote(str(tmp))}"
-    )
-    subprocess.run(pipeline, shell=True, check=True)  # noqa: S602 — our own quoted paths
-    subprocess.run(["tabix", "-p", "bed", str(tmp)], check=True)
-    Path(str(tmp) + ".tbi").replace(tbi)
-    tmp.replace(out)  # commit both parts together
-    raw.unlink(missing_ok=True)
-    return out
-
-
-def _re2g_header(path) -> list[str]:
-    """The rE2G file's column names, from its leading ``#``-prefixed header line."""
-    import gzip
-
-    with gzip.open(path, "rt") as fh:
-        for ln in fh:
-            if ln.startswith("#"):
-                return ln[1:].rstrip("\n").split("\t")
-    raise RuntimeError(f"{path}: no '#'-prefixed header line to name columns")
-
-
-def re2g_edges(accession: str, region: str = "") -> list[dict[str, str]]:
-    """Enhancer→gene edges for a biosample as dicts holding only the ``_RE2G_KEEP``
-    columns, selected **by header name** (robust to the ~56-column tail; ``Score`` is last).
-
-    ``region`` is a tabix string (``"chr7:55000000-55300000"``, 1-based inclusive); only
-    rows overlapping it are read (axis 2). Empty ``region`` streams the whole file.
-    """
-    path = re2g_indexed(accession)
-    idx = {name: i for i, name in enumerate(_re2g_header(path))}
-    if region:
-        out = subprocess.run(["tabix", str(path), region],  # noqa: S603
-                             capture_output=True, text=True, check=True).stdout
-        lines = out.splitlines()
-    else:
-        import gzip
-        with gzip.open(path, "rt") as fh:
-            lines = [ln for ln in fh.read().splitlines() if not ln.startswith("#")]
-    return [{k: f[idx[k]] for k in _RE2G_KEEP}
-            for f in (ln.split("\t") for ln in lines if ln)]
-
-
-def _tss_pos(raw: str) -> int:
-    """Parse a TSS coordinate from an rE2G ``target_tss`` cell — tolerate a bare int,
-    ``chr:pos``, or ``start-end`` (take the first)."""
-    return int(raw.split("-")[0].split(":")[-1])
-
-
-def augment_grove(base_gg, cohorts):
-    """Augment the GENCODE grove **in place** with one or more cohorts' rE2G edges.
-
-    Deserialize ``base_gg`` (the built GENCODE `.gg`) into a mutable ``pg.Grove`` — every
-    gene/transcript/exon key already present — then add an **enhancer** node per rE2G
-    element and a bidirectional pair of edges to the *existing* GENCODE **gene** key:
-    ``{"rel": "regulates"}`` (enhancer→gene, for ``variant ∩ enhancer → gene``) and
-    ``{"rel": "regulated_by"}`` (gene→enhancer, for ``gene → its enhancers`` — pygenogrove
-    has no reverse-neighbor call). The cross-index edge over a shared gene key is the point:
-    one traversal reaches from a variant/gene into the regulatory layer and back.
-
-    ``cohorts`` maps a **cohort label → its list of replicate edge-sets** (each from
-    ``re2g_edges``). A link (enhancer element → gene) is merged *within* a cohort across its
-    replicates (score = **max**, n = **replicate support**) and *across* cohorts into one
-    edge whose payload is a per-cohort map — genogrove is a simple graph (one edge per pair),
-    so tissue-specificity lives in the metadata, not parallel edges::
-
-        {"rel": "regulates", "byCohort": {"<label>": {"score": .., "n": ..}, ...}}
-
-    The gene is located by intersecting at the rE2G ``TargetGeneTSS`` and matching the GENCODE
-    gene's ENSG id (versioned → compared on the base) to ``TargetGeneEnsemblID``. rE2G targets
-    absent from GENCODE are counted, not invented. BED is half-open; the key is 0-based closed,
-    so ``end`` shifts by one. Returns ``(grove, stats)``.
-    """
-    import pygenogrove as pg
-
-    g = pg.Grove.deserialize(str(base_gg))
-    gene_cache: dict[str, object] = {}  # base ENSG id -> gene Key, or None (confirmed miss)
-
-    def find_gene(chrom, tss, base):
-        if base in gene_cache:
-            return gene_cache[base]
-        hit = None
-        # "*" is the strand wildcard — genes carry real strands (+/-), so a "." query
-        # would match nothing. See pygenogrove test_object_grove (strand is significant).
-        for k in g.intersect(pg.GenomicCoordinate("*", tss, tss), chrom):
-            d = k.data
-            if d.get("type") == "gene" and (d.get("id") or "").split(".")[0] == base:
-                hit = k
-                break
-        gene_cache[base] = hit
-        return hit
-
-    # Pass 1: fold all replicates of all cohorts into one link table. Link key = (element
-    # interval, gene ENSG). Per cohort we keep score=max and reps=set of replicate indices,
-    # so a link's cohorts and per-cohort support fall out. Within a cohort a link is unique
-    # per replicate, so the reps set size is the support count.
-    links: dict[tuple, dict] = {}
-    missed = 0
-    for label, replicates in cohorts.items():
-        for rep_i, edges in enumerate(replicates):
-            for e in edges:
-                base = e["TargetGeneEnsemblID"].split(".")[0]
-                gene = find_gene(e["chr"], _tss_pos(e["TargetGeneTSS"]), base)
-                if gene is None:  # rE2G target not in this GENCODE build — count, don't fabricate
-                    missed += 1
-                    continue
-                chrom, es, ee = e["chr"], int(e["start"]), int(e["end"]) - 1  # half-open -> closed
-                lk = links.get((chrom, es, ee, base))
-                if lk is None:
-                    lk = links[(chrom, es, ee, base)] = {
-                        "chrom": chrom, "es": es, "ee": ee, "gene": gene, "class": e["class"],
-                        "self_prom": e["isSelfPromoter"].upper() == "TRUE", "by": {}}
-                c = lk["by"].get(label)
-                score = float(e["Score"])
-                if c is None:
-                    lk["by"][label] = {"score": score, "reps": {rep_i}}
-                else:
-                    c["score"] = max(c["score"], score)
-                    c["reps"].add(rep_i)
-
-    # Pass 2: materialise deduped enhancer nodes + the regulates / regulated_by edge pair,
-    # each carrying the per-cohort {score, n} map.
-    enh: dict[tuple, object] = {}  # (chrom, start, end) -> enhancer Key (an element may hit many genes)
-    self_prom = 0
-    per_cohort: dict[str, dict] = {c: {"links": 0, "n_dist": {}} for c in cohorts}
-    for lk in links.values():
-        ek = (lk["chrom"], lk["es"], lk["ee"])
-        if ek not in enh:  # one node per element; class (col 5) is the only stored annotation
-            enh[ek] = g.insert(lk["chrom"], pg.GenomicCoordinate(".", lk["es"], lk["ee"]),
-                               {"type": "enhancer", "class": lk["class"]})
-        by_cohort = {}
-        for label, c in lk["by"].items():
-            n = len(c["reps"])
-            by_cohort[label] = {"score": c["score"], "n": n}
-            stat = per_cohort[label]
-            stat["links"] += 1
-            stat["n_dist"][n] = stat["n_dist"].get(n, 0) + 1
-        # score/class derive from the nodes; self-promoters stay (self-identifying via
-        # class + ~0 distance). Bidirectional so gene→enhancer is one clean hop.
-        g.add_edge(enh[ek], lk["gene"], {"rel": "regulates", "byCohort": by_cohort})
-        g.add_edge(lk["gene"], enh[ek], {"rel": "regulated_by", "byCohort": by_cohort})
-        if lk["self_prom"]:
-            self_prom += 1
-    for stat in per_cohort.values():  # tidy: sort each cohort's n_dist by support count
-        stat["n_dist"] = {k: stat["n_dist"][k] for k in sorted(stat["n_dist"])}
-    return g, {"enhancers": len(enh), "regulates": len(links), "cohorts": per_cohort,
-               "missed_targets": missed, "self_promoters": self_prom}
-
-
-# Bump when the rE2G augmentation's node/edge schema changes, so a stale combined `.gg`
-# (valid pygenogrove but built from an older edge model) is rebuilt, not silently served.
-# v2 = byCohort edge map + reverse regulated_by edges.
-_RE2G_SCHEMA = "2"
-
-
-def augmented_grove_path(base_name: str, cohorts) -> Path:
-    """The cache path for the combined grove of ``base_name`` + ``cohorts`` (may not exist).
-
-    Cache identity = the edge-schema version + every accession involved (sorted), so a
-    different cohort set — or a schema bump — is a different grove, and the same set reuses
-    the cache. Lets a caller check ``.exists()`` before triggering the (slow, first-run)
-    build in ``ensure_augmented_grove``.
-
-    The accession set is hashed, not spelled out: a whole-tissue cohort can carry 60+
-    replicates, and joining them would overflow the 255-byte filename limit (errno 63).
-    """
-    all_accs = sorted(a for accs in cohorts.values() for a in accs)
-    digest = hashlib.sha256("-".join(all_accs).encode()).hexdigest()[:16]
-    return _all_grove_gg(base_name).with_name(f"+re2g{_RE2G_SCHEMA}-{digest}.gg")
-
-
-def ensure_augmented_grove(base_name: str, cohorts, progress=None) -> Path:
-    """Build + cache the combined grove = ``base_name``'s GENCODE grove augmented with the
-    given **cohorts**. ``cohorts`` maps a cohort label → its replicate accession list (e.g.
-    from ``re2g_cohorts()``); each replicate's BED is fetched and merged (per-cohort ``score``
-    = max, ``n`` = replicate support, held in a ``byCohort`` edge map). Returns the `.gg`
-    path, built once and cached keyed by the full cohort/accession set. Fetching needs htslib
-    + network; the query path only opens the resulting local `.gg` via ``GroveView``.
-
-    ``progress`` is an optional ``(kind, done, total, label)`` callback for a caller that wants
-    to show build steps (``kind`` in ``"fetch"``/``"augment"``/``"serialize"``): a
-    whole-tissue cohort fetches 60+ replicate tracks, so the build is slow and worth narrating.
-    """
-    gg = augmented_grove_path(base_name, cohorts)
-    if gg.exists():
-        return gg
-    base_gg = ensure_all_grove(base_name)  # the pinned GENCODE .gg
-    gg.parent.mkdir(parents=True, exist_ok=True)
-    tmp = gg.with_name(gg.name + ".tmp")
-    total = sum(len(accs) for accs in cohorts.values())
-    done = 0
-    edge_sets = {}
-    for label, accs in cohorts.items():
-        edges = []
-        for a in sorted(accs):
-            edges.append(re2g_edges(a, ""))
-            done += 1
-            if progress:
-                progress("fetch", done, total, label)
-        edge_sets[label] = edges
-    if progress:
-        progress("augment", total, total, None)
-    grove, _stats = augment_grove(base_gg, edge_sets)
-    if progress:
-        progress("serialize", total, total, None)
-    grove.serialize(str(tmp))
-    tmp.replace(gg)
-    return gg

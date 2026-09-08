@@ -24,6 +24,12 @@ htmlcov/
 # Secrets
 .env
 
+# Local agent instructions — imports the committed AGENTS.md (see pygenogrove for the pattern)
+CLAUDE.md
+
+# Internal development automation; project CI workflows remain tracked.
+/.github/workflows/create-pr.yml
+
 # Raw genomic data downloaded during data prep (root-level only, so src/ask/data/
 # catalogs stay tracked). Datasets are pinned in ask.resources, not committed here.
 /*.bed

@@ -40,7 +40,7 @@ def test_every_advertised_method_reaches_the_model() -> None:
     block = resources_block("GENCODE_HUMAN", "test description", "- test layer")
     for method in QUERY_SURFACE:
         assert f"`{method}`" in block, f"{method} is in QUERY_SURFACE but not in the rendered block"
-    assert "Query-only:" in block
+    assert "Read-only" in block
 
 
 def test_resources_block_interpolates_its_arguments() -> None:
