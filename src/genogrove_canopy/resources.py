@@ -224,13 +224,14 @@ RESOURCES: dict[str, Resource] = {
         # `pcawg.sv.icgc.hg19` original (build-time step, not resolved on a user's machine; same
         # shape as `encode.ccre.v4`) and re-hosted, since there's no upstream hg38 original. 179,905/179,973 SVs lifted (0.04%
         # dropped — didn't lift cleanly). Chrom columns normalized to "chr"-prefixed to match the
-        # GENCODE backbone.
+        # GENCODE backbone. Re-lifted once with the strand of reverse-mapped breakends corrected
+        # (778 records); the dataset's `layers/genomic/` layout starts with this commit.
         url=(
             "https://huggingface.co/datasets/genogrove/canopy/resolve/"
-            "e4715c7a82f5ed65d69919811eed09396b369b68"
-            "/pcawg_sv/final_consensus_sv_bedpe_passonly.icgc.public.hg38.tgz"
+            "b3abfea82ad29de7dbadda47baeec5a99c4bce77"
+            "/layers/genomic/pcawg-sv/final_consensus_sv_bedpe_passonly.icgc.public.hg38.tgz"
         ),
-        sha256="3c6a6eaadd069bf576a4ff58dfd88ccc20ec90bebf2f01da9a2bac8465b4de2c",
+        sha256="b06722c0ed2f7ad22085d2a3630b3711516b7d071313dd4a25b66fd63e1cacd6",
         filename="final_consensus_sv_bedpe_passonly.icgc.public.hg38.tgz",
         description="PCAWG consensus SV calls (v1.6), ICGC portion, 1,926 samples, open access, "
                     "lifted to GRCh38.",
@@ -241,10 +242,10 @@ RESOURCES: dict[str, Resource] = {
         # 129,215/129,273 SVs lifted (0.04% dropped).
         url=(
             "https://huggingface.co/datasets/genogrove/canopy/resolve/"
-            "e4715c7a82f5ed65d69919811eed09396b369b68"
-            "/pcawg_sv/final_consensus_sv_bedpe_passonly.tcga.public.hg38.tgz"
+            "b3abfea82ad29de7dbadda47baeec5a99c4bce77"
+            "/layers/genomic/pcawg-sv/final_consensus_sv_bedpe_passonly.tcga.public.hg38.tgz"
         ),
-        sha256="0cd21663bae1ab9f9dbde85cba74c7a0c8665bb27656786bffc680976add1e1f",
+        sha256="d7c6fb040b518b8f590a685c7da1de372d4142b923b5da2da06ea8091ed8a5b6",
         filename="final_consensus_sv_bedpe_passonly.tcga.public.hg38.tgz",
         description="PCAWG consensus SV calls (v1.6), TCGA portion, 822 samples, open access, "
                     "lifted to GRCh38.",
