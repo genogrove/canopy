@@ -112,6 +112,9 @@ def test_warm_worker_reuses_the_attached_grove_and_a_query_cannot_mutate_it(tmp_
         first = w.submit(pre + count + ident
                          + "try:\n    GROVE.insert('chr1', pg.GenomicCoordinate('.', 5, 6), {})\n"
                          "except AttributeError as e:\n    print('refused', e)\n")
+        # A plain (no-cohort) question in between must not be able to reach the memo either.
+        plain = w.submit("import json\n" + enhancers.preamble(str(gg))
+                         + "print('hidden', '_CANOPY_STATE' not in globals())\n")
         second = w.submit(pre + count + ident)
         third = w.submit(pre2 + count + ident + both)
     finally:
@@ -119,6 +122,7 @@ def test_warm_worker_reuses_the_attached_grove_and_a_query_cannot_mutate_it(tmp_
 
     assert first.returncode == 0, first.stderr
     assert "enh 1" in first.stdout and "refused" in first.stdout
+    assert plain.returncode == 0 and "hidden True" in plain.stdout, plain.stderr
     assert second.returncode == 0, second.stderr
     assert "enh 1" in second.stdout                       # the refused insert left no trace
     assert third.returncode == 0, third.stderr

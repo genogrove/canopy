@@ -192,9 +192,9 @@ def preamble(gg: str, cohort_links: dict[str, str] | None = None) -> str:
     """
     import json
 
-    if not cohort_links:
+    if not cohort_links:  # the worker hands _CANOPY_STATE to every query: hide it here too
         return (f"import pygenogrove as pg\nGROVE = pg.GroveView.open({json.dumps(gg)})\n"
-                "COHORTS = []\n")
+                "COHORTS = []\nglobals().pop('_CANOPY_STATE', None)\n")
 
     import inspect
 
