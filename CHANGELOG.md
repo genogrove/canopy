@@ -18,11 +18,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   onto the grove in the sandbox instead of being injected as a literal, and
   `.github/workflows/create-pr.yml` auto-opens a PR for any pushed branch without one
   ([#26](https://github.com/genogrove/canopy/pull/26)).
-- **rE2G provenance is recorded**: the enhancer layer is the one dataset fetched from ENCODE with
-  no pinned checksum, so a rerun could silently receive different bytes. The sha256 of what was
-  actually fetched is now recorded beside the cached index and readable via `re2g_provenance()`,
-  and the fetch announces itself as unpinned instead of looking like every other verified
-  download ([#20](https://github.com/genogrove/canopy/issues/20), [#23](https://github.com/genogrove/canopy/pull/23)).
+- **rE2G provenance**: every enhancer index file a query reads is pinned by sha256 in a
+  manifest shipped with the package and fetched from one immutable commit, so a rerun gets
+  exactly the bytes the published results were computed from. (The per-accession ENCODE fetch
+  with recorded digests that #23 added has been removed along with its only caller; the pins
+  cover it.) ([#20](https://github.com/genogrove/canopy/issues/20), [#23](https://github.com/genogrove/canopy/pull/23))
 - **Progress and timestamped messages**: a 109 MB first-run download used to print one line and
   then look hung. It now reports a percentage — redrawn in place on a terminal, one line per decile
   when piped, so a CI log stays readable — and every CLI message carries a
