@@ -172,3 +172,36 @@ def test_system_prompt_worked_example_runs_against_the_attached_grove(tmp_path):
     assert enh["score"] == 0.99999 and enh["n"] == 1 and enh["cohort"] == "EFO:0001203"
     assert enh["target"] == "EGFR" and enh["name"] == "enh:promoter->EGFR"
     assert enh["ccre_overlap"] == [{"id": "EH38E0000001", "class": "PLS", "bp": 301}]
+
+
+def test_grove_context_grants_resolved_paths_so_a_symlinked_cache_works(tmp_path, monkeypatch):
+    """The sandbox resolves its granted roots; if the host handed the preamble a path spelled
+    through a symlink (a `GENOGROVE_CANOPY_CACHE` under `/var`, say), every read was refused."""
+    from genogrove_canopy import resources
+    from genogrove_canopy.cli import _grove_context
+    from genogrove_canopy.layers import enhancers
+
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+
+    g = pg.Grove(order=100)
+    g.insert("chr1", pg.GenomicCoordinate("+", 999, 1999), {"type": "gene", "id": "ENSG1.2"})
+    g.serialize(str(real / "mini.gg"))
+    (real / "links").mkdir()
+    (real / "links" / "c.links.tsv").write_text("chr1\t100\t200\tintergenic\tENSG1\tchr1\t1000\t1\t0.5\t0.9\n")
+    monkeypatch.setattr(resources, "ensure_all_grove", lambda name: link / "mini.gg")   # via the symlink
+    monkeypatch.setattr(enhancers, "LINKS_DIR", link / "links")
+    monkeypatch.setattr(enhancers, "ensure_index", lambda c: True)
+
+    _, base_pre, data_paths = _grove_context()
+    links = enhancers.links_file("C")
+    assert "link/" not in base_pre and all("link/" not in p for p in data_paths) and "link/" not in str(links)
+
+    code = (base_pre + enhancers.preamble(data_paths[0], {"C": str(links)})
+            + "print('enh', sum(1 for k in GROVE.intersect(pg.GenomicCoordinate('*', 150, 150), 'chr1')"
+              " if k.data.get('type') == 'enhancer'))\n")
+    result = sandbox.run(code, data_paths=data_paths, extra_syspath=[_pygenogrove_site_dir()])
+    assert result.returncode == 0, result.stderr
+    assert "enh 1" in result.stdout

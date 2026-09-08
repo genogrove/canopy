@@ -136,14 +136,16 @@ def _grove_context():
     from genogrove_canopy import layers
     from genogrove_canopy.layers import enhancers
 
-    gg = str(resources.ensure_all_grove(_BASE))
+    # Resolved: the sandbox compares every read against `Path.resolve()`d roots, so a symlinked
+    # cache dir spelled two ways would refuse its own grove.
+    gg = str(resources.ensure_all_grove(_BASE).resolve())
     block = resources_block(
         "GROVE", resources.RESOURCES[_BASE].description,
         layers.catalogue_block(["ccre", "enhancers"]),
     )
     # The sandbox reads only these roots. `LINKS_DIR` is where `enhancers.preamble`'s
     # `attach_links` opens a cohort's links table, so it must be granted alongside the grove.
-    return block, enhancers.preamble(gg), [gg, str(enhancers.LINKS_DIR)]
+    return block, enhancers.preamble(gg), [gg, str(enhancers.LINKS_DIR.resolve())]
 
 
 def resources_block(var: str, description: str, layers_block: str) -> str:

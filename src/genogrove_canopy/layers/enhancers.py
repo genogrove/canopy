@@ -147,7 +147,7 @@ def links_file(cohort: str) -> Path:
     absent from the gene table are dropped here rather than in the sandbox — resolving them there
     would fail anyway, and the host is where a count can be reported.
     """
-    dest = LINKS_DIR / f"{_slug(cohort)}.links.tsv"
+    dest = (LINKS_DIR / f"{_slug(cohort)}.links.tsv").resolve()  # resolved: see cli._grove_context
     if dest.exists():
         return dest
     if not ensure_index(cohort):
