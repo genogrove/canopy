@@ -10,7 +10,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **SV layer reachable from a question, one cohort vocabulary for both layers**: the model
   declares `COHORT: <term>` and `LAYERS: enhancers; sv` (`LAYERS` replaces the unused-content
   `TARGETS`); the host resolves the term through a curated bridge (`data/cohorts.tsv`: a tissue
-  word gives the rE2G biosample id *and* the PCAWG project codes) and attaches exactly the
+  word gives the tissue biosample *and* the PCAWG project codes, the disease word the cancer
+  cell line; the terms are listed in the prompt) and attaches exactly the
   declared layers into the warm grove, echoing `COHORTS` / `SV_COHORTS` into the sandbox for
   filtering. PCAWG tumour cohorts (47 ICGC project codes, from the pinned sample sheet via
   `tools/build_pcawg_cohorts.py` → packaged `data/pcawg_cohorts.tsv`) are the SV loading unit:
