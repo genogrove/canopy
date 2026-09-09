@@ -184,7 +184,7 @@ def _grove_context():
     gg = str(resources.ensure_all_grove(_BASE).resolve())
     block = resources_block(
         "GROVE", resources.RESOURCES[_BASE].description,
-        layers.catalogue_block(["ccre", "enhancers"]),
+        layers.catalogue_block(["ccre", "enhancers", "sv"]),
     )
     # The sandbox reads only these roots. `LINKS_DIR` is where `enhancers.preamble`'s
     # `attach_links` opens a cohort's links table, so it must be granted alongside the grove.
@@ -201,9 +201,10 @@ def resources_block(var: str, description: str, layers_block: str) -> str:
     """
     return (
         f"- `{var}`: an **open** grove handle ({description}) — gene/transcript/exon structure "
-        f"**plus the ENCODE cCRE nodes**, and, when you declare `COHORT`/`TARGETS` (see "
-        f"\"Enhancers\"), that cohort's rE2G enhancer nodes and edges, attached by the host before "
-        f"your code runs. Query `{var}` directly. **Never open a path yourself** — a handle you "
+        f"**plus the ENCODE cCRE nodes**, and, when you declare `COHORT`/`LAYERS` (see "
+        f"\"Per-question layers\"), that cohort's rE2G enhancer nodes/edges and/or PCAWG "
+        f"breakpoint edges, attached by the host before your code runs. Query `{var}` directly. "
+        f"**Never open a path yourself** — a handle you "
         f"open lacks the attached layer. A **located** query (a variant at chr7:55191822) reads "
         f"just that locus; a **genome-wide / gene-name** query works from the same handle. "
         f"Read-only — mutators raise; query with: {', '.join(f'`{m}`' for m in QUERY_SURFACE)}.\n"

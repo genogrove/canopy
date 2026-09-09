@@ -146,7 +146,7 @@ def test_system_prompt_worked_example_runs_against_the_attached_grove(tmp_path):
     from genogrove_canopy.layers import enhancers
 
     md = (Path(enhancers.__file__).parents[1] / "prompts" / "system.md").read_text()
-    m = re.search(r"### Worked example.*?COHORT: MCF-7\nTARGETS: .*?\n\n```python\n(.*?)```", md, re.S)
+    m = re.search(r"### Worked example.*?COHORT: breast\nLAYERS: enhancers\n\n```python\n(.*?)```", md, re.S)
     assert m, "worked example not found in system.md"
     example = m.group(1)
 
@@ -210,3 +210,39 @@ def test_grove_context_grants_resolved_paths_so_a_symlinked_cache_works(tmp_path
     result = sandbox.run(code, data_paths=data_paths, extra_syspath=[_pygenogrove_site_dir()])
     assert result.returncode == 0, result.stderr
     assert "enh 1" in result.stdout
+
+
+def test_system_prompt_sv_example_runs_against_the_attached_grove(tmp_path):
+    """The SV worked example, verbatim, through the real sandbox: MYC at its real coordinate,
+    one BRCA-US cohort table with two SVs (one to a gene, one intergenic), attached through
+    preamble.build; the rows must name the partner, the breakpoints, sample and cohort."""
+    import json
+    import re
+    from pathlib import Path
+
+    from genogrove_canopy.layers import sv
+
+    md = (Path(sv.__file__).parents[1] / "prompts" / "system.md").read_text()
+    m = re.search(r"### Structural variants.*?COHORT: breast\nLAYERS: sv\n\n```python\n(.*?)```", md, re.S)
+    assert m, "SV worked example not found in system.md"
+
+    g = pg.Grove(order=100)
+    g.insert("chr8", pg.GenomicCoordinate("+", 127_735_433, 127_742_951), {"type": "gene", "id": "ENSG00000136997.20", "name": "MYC"})
+    g.insert("chr8", pg.GenomicCoordinate("-", 127_890_000, 127_900_000), {"type": "gene", "id": "ENSG1", "name": "PVT1"})
+    gg = tmp_path / "myc.gg"
+    g.serialize(str(gg))
+    table = tmp_path / "BRCA-US.tsv"
+    table.write_text("\t".join(sv._FIELDS + ("sample", "cohort")) + "\n"
+                     "chr8\t127740000\t127740001\tchr8\t127895000\t127895001\tSV1\t12\t+\t-\tDEL\tm\tA1\tBRCA-US\n"
+                     "chr8\t127738000\t127738001\tchr8\t130500000\t130500001\tSV2\t4\t+\t+\th2hINV\tm\tA2\tBRCA-US\n")
+    code = "import json\n" + preamble.build(str(gg), None, {"BRCA-US": str(table)}) + m.group(1)
+    result = sandbox.run(code, data_paths=[str(tmp_path)], extra_syspath=[_pygenogrove_site_dir()])
+
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert lines[0] == "MYC rearrangements in BRCA-US (2 SVs, 2 tumours):"
+    rows = [json.loads(ln) for ln in lines[1:]]
+    assert [(r["svclass"], r["name"], r["type"]) for r in rows] == [
+        ("DEL", "PVT1", "gene"), ("INV", "intergenic", "intergenic_region")]
+    assert rows[0]["breakpoint1"] == "chr8:127740000" and rows[0]["sample"] == "A1" and rows[0]["cohort"] == "BRCA-US"
+    assert (rows[1]["start"], rows[1]["end"]) == (130_000_000, 130_999_999)      # the 1 Mb bin

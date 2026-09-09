@@ -70,7 +70,7 @@ $ uv run canopy --format json "List the exons of EGFR"
 | `--format text\|bed\|tsv\|json` | Output format. `text` is an aligned table; the rest are machine-readable. |
 | `--show-code` | Print the generated Python before running it. |
 | `-i, --interactive` | Keep the grove open across questions — the ~200 ms open is paid once, then queries are sub-millisecond. |
-| `--cohort NAME` | Pick the ENCODE-rE2G biosample for enhancer questions (`--list-cohorts` to browse 369 of them). |
+| `--cohort NAME` | Pick the cohort(s) for enhancer and SV questions, overriding what the model read from the question. A tissue word (`breast`, `prostate`) resolves both layers through a curated table; an ENCODE biosample name/id or a PCAWG project code resolves one. `--list-cohorts` prints all of it. |
 | `--init` | Download the grove now and exit. |
 
 There is also a local web front end over the same pipeline:
@@ -81,7 +81,7 @@ $ uv run canopy serve
 
 ## What you can ask about
 
-One grove, queried through one handle, holds three layers:
+One grove, queried through one handle, holds four layers:
 
 - **Gene structure** — GENCODE v50: genes, transcripts and exons, with `contains` and
   `first_exon`/`next` splice-chain edges, and CDS ranges on each exon. Only genes are
@@ -93,14 +93,11 @@ One grove, queried through one handle, holds three layers:
   cohort-specific, so the declared cohort's links are attached into the grove per
   question, as enhancer nodes with `regulates`/`regulated_by` edges carrying the score.
 
-A fourth layer is in the package but not yet reachable from a question:
-
-- **Structural variants** — per-sample breakpoint edges (`layers/sv.py`): each SV is one
-  `breakpoint_edge` between the two backbone nodes its breakends fall in, the containing
-  gene or, outside every gene, a 1 Mb bin created on demand. Genes are never cut. PCAWG
-  consensus calls (ICGC + TCGA, open access, lifted to GRCh38) are pinned as the source.
-  Attaching a sample to the grove works and is tested; selecting a sample from a question
-  is not wired up yet.
+- **Structural variants** — PCAWG consensus calls (ICGC + TCGA, open access, lifted to
+  GRCh38), attached per question by tumour cohort (47 ICGC project codes, e.g. `BRCA-US`).
+  Each SV is one `breakpoint_edge` between the two backbone nodes its breakends fall in,
+  the containing gene or, outside every gene, a 1 Mb bin created on demand. Genes are
+  never cut; edges carry the sample, so a cohort's tumours stay distinguishable.
   Edges retain the original caller label as `source_svclass` and normalize inversion
   subtypes to `svclass="INV"`. Those classes describe the original hg19 PCAWG call;
   `junction_class` separately describes the GRCh38 junction geometry, which can differ

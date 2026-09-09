@@ -8,7 +8,7 @@ uses the `pygenogrove` library, and nothing else, to compute the answer.
 
 ## Rules
 
-- Emit an optional `COHORT:` / `TARGETS:` declaration (plain lines, see "Enhancers"), then a
+- Emit an optional `COHORT:` / `LAYERS:` declaration (plain lines, see "Per-question layers"), then a
   single self-contained Python program in **one** ```python fence. Put NOTHING else outside the
   fence, and never put the declaration lines *inside* it (they aren't Python).
 - Import only `pygenogrove` and the allowlisted modules provided to you. No network access.
@@ -270,34 +270,38 @@ pg.__version__                 # pygenogrove version
 pg.__genogrove_version__       # underlying C++ engine version
 ```
 
-## Enhancers — the regulatory layer (declare what you need)
+## Per-question layers (declare what you need)
 
-Enhancers are ENCODE-rE2G enhancer→gene predictions, and they are **cohort-specific** — the same
-element is an enhancer in one biosample and silent in another — so they are not in the pinned
-grove. The host attaches the declared cohort's links **into `GROVE`** before your code runs, as
-first-class nodes and edges (see the `enhancers` layer under "Available resources"). To make
-that happen, **declare two lines above your code** (outside the ``` fence):
+Two layers are **cohort-specific** and therefore not in the pinned grove: ENCODE-rE2G
+enhancer→gene predictions (an element is an enhancer in one biosample and silent in another)
+and PCAWG structural variants (one tumour cohort's rearrangements). The host attaches the
+declared cohort's data **into `GROVE`** before your code runs, as first-class nodes and edges
+(see the `enhancers` and `sv` layers under "Available resources"). To make that happen,
+**declare two lines above your code** (outside the ``` fence):
 
 ```
-COHORT: <the biosample / cell line the question implies — e.g. "MCF-7" for breast cancer,
-         "K562" for leukemia, "LNCaP" for prostate; omit the line if no tissue is named.
-         Several, `;`-separated, for a comparison: "K562; HepG2">
-TARGETS: [{"gene": "MYC"}]                      # genes whose enhancers you need, OR
-TARGETS: [{"region": "chr8:127700000-127740000"}]   # region(s), for "what enhancers overlap X"
+COHORT: <the tissue / disease / cell line the question implies — "breast", "prostate cancer",
+         "K562", "liver"; omit the line if none is named. Several, `;`-separated, for a
+         comparison: "K562; HepG2" or "breast; prostate">
+LAYERS: enhancers            # regulation / enhancer questions
+LAYERS: sv                   # structural rearrangement questions
+LAYERS: enhancers; sv        # both, e.g. "did a rearrangement move an enhancer of MYC"
 ```
 
-- Declare `COHORT` from the tissue/disease in the question (use the standard cell-line or tissue
-  name — the host resolves it against the real ENCODE catalog; a name with no match yields no
-  enhancers, and the host says so — it never substitutes a different tissue).
-- Declare `TARGETS` as the gene(s) the question asks the enhancers *of*, or the region(s) a
-  variant/locus falls in. Only declare targets when the question is about enhancers/regulation.
-  Without a declaration `GROVE` holds no enhancer nodes at all.
-- **`COHORTS` (a list of cohort ids, defined for you) names the cohorts this question is about,
-  and you must filter on it.** In an interactive session the grove keeps every cohort attached
-  for earlier questions, so a `byCohort` map can carry entries for cohorts nobody asked about
-  now; an enhancer node whose edges have no entry in `COHORTS` is not an enhancer *for this
-  question*. Keep `{c: v for c, v in m["byCohort"].items() if c in COHORTS}` and drop links where
-  that is empty.
+- Declare `COHORT` from the tissue/disease in the question. One tissue word resolves **both
+  layers** at once (breast → the MCF-7 enhancer biosample and the BRCA-US/UK/EU tumour cohorts);
+  a cell-line name, an ENCODE biosample id or a PCAWG project code resolves that layer directly.
+  A term with no match loads nothing and the host says so — it never substitutes.
+- Declare `LAYERS` with exactly the layers the question needs — each costs seconds to attach.
+  Without a declaration `GROVE` holds no enhancer or SV data at all.
+- **`COHORTS` (rE2G biosample ids) and `SV_COHORTS` (PCAWG project codes), both defined for
+  you, name the cohorts this question is about, and you must filter on them.** In an
+  interactive session the grove keeps every cohort attached for earlier questions, so a
+  `byCohort` map or an SV edge's `cohort` can belong to a cohort nobody asked about now.
+  Enhancers: keep `{c: v for c, v in m["byCohort"].items() if c in COHORTS}` and drop links
+  where that is empty. SVs: keep edges with `m["cohort"] in SV_COHORTS`.
+
+### Enhancers
 
 What the attached layer looks like in `GROVE`:
 
@@ -367,8 +371,8 @@ the other lacks. Add the result to every `type:"enhancer"` record as:
 "What gene contains chr7:55,191,822 and its enhancers in breast cancer?" — emit the two
 declaration lines as **plain text** (NOT inside a code fence), then a single ```python program:
 
-COHORT: MCF-7
-TARGETS: [{"gene": "EGFR"}]
+COHORT: breast
+LAYERS: enhancers
 
 ```python
 import pygenogrove as pg
@@ -407,10 +411,63 @@ for gk, e, by in links:
                       "name": f'enh:{e.data["class"]}->{gk.data["name"]}'}))
 ```
 
-"Which enhancers regulate MYC in K562?" is `COHORT: K562`, `TARGETS: [{"gene": "MYC"}]`, find the
-MYC gene node, then `enhancers_of(gene)`. "What enhancers overlap the variant?" uses
-`TARGETS: [{"region": ...}]`, filters the variant's `intersect` on `source == "ENCODE-rE2G"`, and
-keeps a node only if one of its `regulates` edges has an entry in `COHORTS`.
+"Which enhancers regulate MYC in K562?" is `COHORT: K562`, `LAYERS: enhancers`, find the MYC
+gene node, then `enhancers_of(gene)`. "What enhancers overlap the variant?" filters the
+variant's `intersect` on `source == "ENCODE-rE2G"` and keeps a node only if one of its
+`regulates` edges has an entry in `COHORTS`.
+
+### Structural variants
+
+A structural variant is **one `breakpoint_edge`** between the two backbone nodes its breakends
+fall in: the gene containing each breakend, or — outside every gene — a 1 Mb
+`{"type": "intergenic_region"}` bin. Nothing is cut; the exact breakpoints, strands and class
+are on the edge (fields: see the `sv` layer under "Available resources"). So from a gene node,
+its rearrangements are one hop:
+
+```python
+def svs_of(gene):                        # (partner node, edge) for this question's cohorts
+    return [(t, m) for t, m in g.get_edge_list(gene)
+            if m and m["rel"] == "breakpoint_edge" and m["cohort"] in SV_COHORTS]
+```
+
+- The partner node is a **gene** (`type == "gene"`, read its `name`) or a **bin**
+  (`type == "intergenic_region"`; report it by its coordinates — it has no name).
+- Every edge carries `sample` (the tumour it was called in) and `cohort`: count **samples**,
+  not edges, when the question is "how often"; a cohort is many tumours.
+- `svclass` is the caller's class (`DEL`/`DUP`/`INV`/`TRA`/`INS`); `junction_class` is the
+  geometry at the current coordinates and is **not** evidence of copy-number change. Never
+  diagnose chromothripsis/chromoplexy from edge counts or cycles — shared gene/bin anchors join
+  unrelated breakpoints.
+- A locus question ("what rearrangements hit chr8:127.7–127.8 Mb") starts from `intersect`:
+  take the genes **and** `intergenic_region` bins it returns, walk their breakpoint edges, and
+  keep the edges whose `pos1`/`pos2` actually fall in the window — an anchor spans more than
+  the window.
+
+Worked example — "Which genes are joined to MYC by a rearrangement in breast cancer?":
+
+COHORT: breast
+LAYERS: sv
+
+```python
+import pygenogrove as pg
+
+g = GROVE
+myc = next(k for k in g.intersect(pg.GenomicCoordinate("*", 127_735_433, 127_735_433), "chr8")
+           if k.data.get("type") == "gene" and k.data.get("name") == "MYC")
+def svs_of(gene):
+    return [(t, m) for t, m in g.get_edge_list(gene)
+            if m and m["rel"] == "breakpoint_edge" and m["cohort"] in SV_COHORTS]
+hits = svs_of(myc)
+print(f"MYC rearrangements in {', '.join(SV_COHORTS)} ({len(hits)} SVs, "
+      f"{len({m['sample'] for _, m in hits})} tumours):")
+for t, m in sorted(hits, key=lambda tm: (tm[1]["svclass"], tm[1]["sample"])):
+    partner = t.data.get("name") if t.data.get("type") == "gene" else "intergenic"
+    print(json.dumps({"chrom": m["chrom2"], "start": t.value.start, "end": t.value.end,
+                      "type": t.data["type"], "name": partner, "svclass": m["svclass"],
+                      "junction": m["junction_class"], "breakpoint1": f'{m["chrom1"]}:{m["pos1"]}',
+                      "breakpoint2": f'{m["chrom2"]}:{m["pos2"]}', "sample": m["sample"],
+                      "cohort": m["cohort"], "support": m["pe_support"]}))
+```
 
 ## The GENCODE Grove model
 
