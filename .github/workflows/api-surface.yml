@@ -50,7 +50,9 @@ jobs:
       #   Nothing here needs Chrome, so drop that source first.
       - name: Install htslib (build headers + bgzip/tabix binaries)
         run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome*.list
+          # remove every apt source that names dl.google.com, whatever file/format it is in
+          sudo grep -rl "dl.google.com" /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null \
+            | tee /dev/stderr | xargs -r sudo rm -f
           sudo apt-get update && sudo apt-get install -y libhts-dev tabix
 
       # pygenogrove is resolved from the pinned git commit and builds a C++ extension, so this
