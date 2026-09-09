@@ -357,19 +357,51 @@ def _pygenogrove_site_dir() -> str:
     return str(f.parent.parent if f.name == "__init__.py" else f.parent)
 
 
-def _resolve_query_cohorts(args, cohort_hint):
-    """Grounded cohort resolution for a query that needs enhancers, precedence-ordered:
-    ``--cohort`` override → the model's declared ``COHORT`` (matched against the catalog; no
-    match → none, so a wrong tissue is never silently substituted) → the default cohort.
-    Returns ``({name: accessions}, note)`` where ``note`` is a stderr line or ``None``."""
+def _resolve_query_cohorts(args, cohort_hint, layers):
+    """Grounded cohort resolution for a query that declared ``layers``, precedence-ordered:
+    ``--cohort`` override → the model's declared ``COHORT`` (resolved against the catalogs; no
+    match → none, so a wrong tissue is never silently substituted) → the default cohort, but
+    **only for an enhancer question**: SVs are per tumour cohort and there is no honest default.
+    Returns ``(cohorts, note)`` — the ``_resolve_cohorts`` map and a stderr line or ``None``."""
     if args.cohort:
         return _resolve_cohorts(args.cohort), None
     if cohort_hint:  # one or more, `;`-separated — a comparison question names several
         try:
             return _resolve_cohorts([c for c in map(str.strip, cohort_hint.split(";")) if c]), None
         except SystemExit:  # the model named a tissue with no catalog match — don't substitute
-            return {}, f"no ENCODE cohort matched {cohort_hint!r} — no enhancers loaded (see --list-cohorts)"
-    return _resolve_cohorts([DEFAULT_COHORT]), "default"
+            return {}, f"no cohort matched {cohort_hint!r} — nothing attached (see --list-cohorts)"
+    if "enhancers" in layers:
+        return _resolve_cohorts([DEFAULT_COHORT]), "default"
+    return {}, "SVs are per tumour cohort — name a tissue or pass --cohort; nothing attached"
+
+
+def prepare_layers(cohorts, layers, say):
+    """Materialise the declared ``layers`` for the resolved ``cohorts`` (host side, shared by
+    the CLI and ``serve``): returns ``(cohort_links, sv_files)`` for ``preamble.build``.
+    ``say(text)`` reports progress and, per declared layer that has **no** key in these
+    cohorts, says so — the generated code would otherwise run with an empty ``COHORTS`` /
+    ``SV_COHORTS`` and print a plausible-looking zero."""
+    from genogrove_canopy.layers import enhancers, sv
+
+    cohort_links, sv_files = {}, {}
+    names = "; ".join(cohorts)
+    if "enhancers" in layers:
+        ids = _cohort_ids(cohorts)
+        if ids:
+            say(f"Loading ENCODE-rE2G links — cohort(s) {names}")
+            cohort_links = {cid: str(enhancers.links_file(cid)) for cid in ids if enhancers.ensure_index(cid)}
+            if not cohort_links:
+                say(f"no rE2G index for cohort(s) {names} — no enhancers attached")
+        elif cohorts:
+            say(f"no rE2G biosample for cohort(s) {names} — no enhancers attached")
+    if "sv" in layers:
+        codes = _pcawg_codes(cohorts)
+        if codes:
+            say(f"Loading PCAWG SVs — cohort(s) {'; '.join(codes)}")
+            sv_files = {c: str(sv.cohort_file(c)) for c in codes}
+        elif cohorts:
+            say(f"no PCAWG cohort for cohort(s) {names} — no SVs attached")
+    return cohort_links, sv_files
 
 
 def _prepare() -> None:
@@ -415,27 +447,17 @@ def _answer(question, *, system_prompt, base, gg, args, execute):
         print(code, file=sys.stderr)
     enh_pre, enh_s = "", 0.0
     if layers:  # a per-question layer was declared — resolve the cohort(s), prepare its data
-        from genogrove_canopy.layers import enhancers, sv
-        cohorts, note = _resolve_query_cohorts(args, cohort_hint)
-        cohort_links, sv_files = {}, {}
+        cohorts, note = _resolve_query_cohorts(args, cohort_hint, layers)
+        if note and note != "default":
+            log.say(note)
         t_enh = time.perf_counter()
-        if "enhancers" in layers and _cohort_ids(cohorts):
-            log.say(f"Loading ENCODE-rE2G links — cohort(s) {'; '.join(cohorts)}")
-            cohort_links = {cid: str(enhancers.links_file(cid))
-                            for cid in _cohort_ids(cohorts) if enhancers.ensure_index(cid)}
-        if "sv" in layers and _pcawg_codes(cohorts):
-            log.say(f"Loading PCAWG SVs — cohort(s) {'; '.join(_pcawg_codes(cohorts))}")
-            sv_files = {code_: str(sv.cohort_file(code_)) for code_ in _pcawg_codes(cohorts)}
+        cohort_links, sv_files = prepare_layers(cohorts, layers, log.say)
         enh_s = time.perf_counter() - t_enh
         if cohort_links or sv_files:
             enh_pre = preamble.build(gg, cohort_links, sv_files)
             src = " (default — name a tissue or pass --cohort)" if note == "default" else ""
             what = " + ".join(w for w, d in (("rE2G", cohort_links), ("SV", sv_files)) if d)
             log.took(f"{what}: attached {'; '.join(cohorts)}{src}", enh_s)
-        elif note and note != "default":
-            log.say(note)
-        elif cohorts:
-            log.say(f"no {' / '.join(layers)} data for cohort(s) {'; '.join(cohorts)} — nothing attached")
     # JSONL is the output contract, so guarantee `json` is importable even if the
     # generated code forgets the import (it's already in the allowlist).
     log.say("Running the query over the grove")

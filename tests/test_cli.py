@@ -27,7 +27,7 @@ def test_declared_cohorts_split_on_semicolon(monkeypatch):
     seen = []
     monkeypatch.setattr(cli, "_resolve_cohorts", lambda specs: seen.append(specs) or {s: [] for s in specs})
     args = type("A", (), {"cohort": None})()
-    cohorts, note = cli._resolve_query_cohorts(args, "K562; HepG2 ;")
+    cohorts, note = cli._resolve_query_cohorts(args, "K562; HepG2 ;", ["enhancers"])
     assert seen == [["K562", "HepG2"]] and note is None and list(cohorts) == ["K562", "HepG2"]
 
 
@@ -70,3 +70,32 @@ def test_answer_wires_the_declared_layers_for_the_resolved_cohort(monkeypatch, t
     script = scripts[0]
     assert "def attach_tracked(" in script and f'["BRCA-US", "{table}"]' in script
     assert 'SV_COHORTS = ["BRCA-US"]' in script and "COHORTS = []" in script
+
+
+def test_sv_question_without_a_cohort_gets_no_default(monkeypatch):
+    """The LNCaP enhancer default must not reach an SV question: there is no honest default
+    tumour cohort, so resolution returns nothing and says why."""
+    from genogrove_canopy import cli
+
+    args = type("A", (), {"cohort": None})()
+    cohorts, note = cli._resolve_query_cohorts(args, "", ["sv"])
+    assert cohorts == {} and "name a tissue or pass --cohort" in note
+    cohorts, note = cli._resolve_query_cohorts(args, "", ["enhancers", "sv"])
+    assert cohorts and note == "default"                      # an enhancer question still defaults
+
+
+def test_prepare_layers_reports_a_declared_layer_with_no_data(monkeypatch, tmp_path):
+    """`COHORT: K562` / `LAYERS: enhancers; sv`: enhancers attach, but K562 has no PCAWG cohort —
+    that must be said, not left as an empty SV_COHORTS and a plausible '0 rearrangements'."""
+    from genogrove_canopy import cli
+    from genogrove_canopy.layers import enhancers
+
+    links = tmp_path / "k562.tsv"
+    links.write_text("")
+    monkeypatch.setattr(enhancers, "ensure_index", lambda c: True)
+    monkeypatch.setattr(enhancers, "links_file", lambda c: links)
+    said = []
+    cohorts = {"K562": {"re2g": ["EFO:0002067"], "pcawg": []}}
+    cohort_links, sv_files = cli.prepare_layers(cohorts, ["enhancers", "sv"], said.append)
+    assert cohort_links == {"EFO:0002067": str(links)} and sv_files == {}
+    assert any(m.startswith("no PCAWG cohort for cohort(s) K562") for m in said)

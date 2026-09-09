@@ -18,17 +18,21 @@ from genogrove_canopy import serve
 
 
 def test_serve_cohort_precedence():
+    E = ["enhancers"]
     # UI picker overrides the model's declaration
-    cohorts, note = serve._serve_cohorts("LNCaP", "K562")
+    cohorts, note = serve._serve_cohorts("LNCaP", "K562", E)
     assert cohorts and note is None
     # else the model's declared cohort
-    cohorts, note = serve._serve_cohorts("", "K562")
+    cohorts, note = serve._serve_cohorts("", "K562", E)
     assert cohorts and note is None
-    # neither -> the default cohort (flagged)
-    cohorts, note = serve._serve_cohorts("", "")
+    # neither -> the default cohort (flagged) — for an enhancer question only
+    cohorts, note = serve._serve_cohorts("", "", E)
     assert cohorts and note == "default"
+    # an SV question with no cohort gets no default: SVs are per tumour cohort
+    cohorts, note = serve._serve_cohorts("", "", ["sv"])
+    assert cohorts == {} and "tumour cohort" in note
     # a declared tissue with no catalog match -> none, with a note (never silently substituted)
-    cohorts, note = serve._serve_cohorts("", "NoSuchTissue12345")
+    cohorts, note = serve._serve_cohorts("", "NoSuchTissue12345", E)
     assert cohorts == {} and note
 
 
@@ -91,8 +95,8 @@ def test_malformed_request_gets_400(server, body, headers):
 def test_cohort_default_flag_is_not_display_text(monkeypatch):
     """A cohort that resolves but yields no enhancer links must not surface the internal
     "default" sentinel as the user-facing note (the CLI filters it; serve must too)."""
-    monkeypatch.setattr(serve, "_resolve_cohorts", lambda specs: {"LNCaP clone FGC": ["ENCSR1"]})
-    monkeypatch.setattr(serve, "_cohort_ids", lambda c: ["EFO:0005726"])
+    monkeypatch.setattr(serve, "_resolve_cohorts",
+                        lambda specs: {"LNCaP clone FGC": {"re2g": ["EFO:0005726"], "pcawg": []}})
     monkeypatch.setattr(serve.resources, "_all_grove_gg",
                         lambda n: type("P", (), {"exists": lambda s: True})())
     monkeypatch.setattr(serve, "_grove", lambda m: type("G", (), {
@@ -105,8 +109,7 @@ def test_cohort_default_flag_is_not_display_text(monkeypatch):
     monkeypatch.setattr(enhancers, "ensure_index", lambda cohort: False)
 
     result = serve._pipeline("enhancers of MYC", "", "m", lambda k, m: None)
-    assert result["note"] != "default"
-    assert result["note"] is None
+    assert result["note"] != "default" and "no enhancers attached" in result["note"]   # the gap is said, never the sentinel
 
 
 def test_page_served(server):
