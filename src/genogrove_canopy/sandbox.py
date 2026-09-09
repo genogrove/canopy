@@ -119,6 +119,24 @@ class SandboxResult:
     truncated: bool = False
 
 
+def result_error(result: SandboxResult) -> str:
+    """Validate execution before either adapter interprets stdout as an answer: the error text
+    to show, or ``""`` when stdout is a complete, successful answer.
+
+    A failure comes first — its traceback is the actionable fact — with the overflow noted
+    after it, so an exception is never hidden behind "output too long". Both adapters always
+    put a message in stderr on a timeout, so that path needs no fallback of its own.
+    ponytail: one `truncated` flag covers both streams, so a script that floods stderr but
+    prints a complete stdout is refused too; split the flag per stream if that ever bites.
+    """
+    if result.returncode != 0 or result.timed_out:
+        msg = result.stderr.strip() or "(the generated code failed with no output)"
+        return msg + ("\n(its output was also cut at the sandbox cap)" if result.truncated else "")
+    if result.truncated:
+        return "(the generated code printed more than the sandbox output cap, so the answer is incomplete — narrow the query)"
+    return ""
+
+
 # --------------------------------------------------------------------------- #
 # The in-child bootstrap. Prepended to the untrusted code; runs first and
 # installs the import allowlist / read-only open before the code executes.

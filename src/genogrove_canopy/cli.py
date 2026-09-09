@@ -476,8 +476,9 @@ def _answer(question, *, system_prompt, base, gg, args, execute):
     t1 = time.perf_counter()
     result = execute("import json\n" + base + enh_pre + code)
     exec_s = time.perf_counter() - t1
-    if result.returncode != 0 or result.timed_out:
-        return "", (result.stderr.strip() or "(the generated code failed with no output)"), gen_s, enh_s, exec_s
+    error = sandbox.result_error(result)
+    if error:
+        return "", error, gen_s, enh_s, exec_s
     rendered = _render(result.stdout, args.format)
     if not rendered.strip():
         return "", "(the generated code produced no output)", gen_s, enh_s, exec_s
