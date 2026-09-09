@@ -19,6 +19,9 @@ DEFAULT_MODEL = "claude-opus-4-8"
 
 _SYSTEM_MD = Path(__file__).with_name("prompts") / "system.md"
 
+#: The per-question layers the host knows how to attach (see `cli.prepare_layers`).
+_LAYERS = frozenset(("enhancers", "sv"))
+
 #: Ways a model spells "no biosample" instead of omitting the line as system.md asks. Normalised
 #: to "" so the host doesn't hand a placeholder to the ENCODE catalog. This is deliberately
 #: permissive: canopy is meant to be model-agnostic, and treating one vendor's phrasing as the
@@ -99,8 +102,8 @@ def parse_targets_and_code(text: str):
 
     layers = []
     ml = re.search(r"^[ \t]*LAYERS:[ \t]*(.+?)[ \t]*$", text, re.MULTILINE)
-    if ml:
-        layers = [w for w in (x.strip().lower() for x in re.split(r"[;,]", ml.group(1))) if w]
+    if ml:  # only the layers the host can attach; anything else would trigger an empty resolve
+        layers = [w for w in (x.strip().lower() for x in re.split(r"[;,]", ml.group(1))) if w in _LAYERS]
     # `TARGETS: [...]` was the earlier way to say "this is an enhancer question"; its content
     # (genes/regions) is not used — a whole cohort is attached — so it is just `enhancers` now.
     mt = re.search(r"^\s*TARGETS:\s*(\[.*?\])\s*$", text, re.MULTILINE | re.DOTALL)

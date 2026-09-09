@@ -35,7 +35,9 @@ def main() -> None:
                 aliquot = m.name.split("/")[-1].split(".")[0]
                 code = project[aliquot]  # KeyError = a sample the sheet does not know: stop
                 members[code].append(aliquot)
-                n_sv[code] += sum(1 for _ in gzip.open(io.BytesIO(t.extractfile(m).read()), "rt")) - 1
+                with gzip.open(io.BytesIO(t.extractfile(m).read()), "rt") as fh:
+                    next(fh)  # header
+                    n_sv[code] += sum(1 for ln in fh if ln.strip())  # blank lines are not SVs
     out = csv.writer(sys.stdout, delimiter="\t", lineterminator="\n")
     out.writerow(["project_code", "n_samples", "n_svs", "aliquot_ids"])
     for code in sorted(members):

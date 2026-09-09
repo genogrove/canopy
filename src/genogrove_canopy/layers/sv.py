@@ -232,13 +232,14 @@ LAYER = Layer(
     name="sv",
     axis="genomic",
     kind="edge",
-    title="Structural variants — breakpoint graph",
-    when="a question is about structural rearrangement, a specific patient/sample's "
-         "genome structure, chromothripsis/chromoplexy, or whether a gene's regulatory "
-         "context changed due to a rearrangement — scoped to one sample at a time",
+    title="Structural variants — PCAWG breakpoint edges, per tumour cohort",
+    when="a question is about structural rearrangements, what a gene is joined to or how often "
+         "it is broken across tumours, or whether a rearrangement changed a gene's neighbourhood "
+         "— one or more PCAWG tumour cohorts (project codes such as BRCA-US); the sandbox "
+         "filters on SV_COHORTS",
     schema='one `{"rel":"breakpoint_edge", "svclass":<DEL|DUP|INV|TRA|INS>, "sv_id":.., '
-           '"source_svclass":.., "junction_class":.., '
-           '"sample":.., "chrom1":.., "pos1":.., "strand1":.., "chrom2":.., "pos2":.., '
+           '"source_svclass":.., "junction_class":.., "sample":<tumour aliquot id>, '
+           '"cohort":<PCAWG project code>, "chrom1":.., "pos1":.., "strand1":.., "chrom2":.., "pos2":.., '
            '"strand2":.., "pe_support":..}` edge per SV (both directions) between the two '
            'backbone nodes its breakends fall in: the containing gene, or a 1 Mb '
            '`{"type":"intergenic_region"}` bin when no gene contains the position. Walk it from '
