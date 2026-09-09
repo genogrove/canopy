@@ -134,6 +134,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#6](https://github.com/genogrove/canopy/pull/6)).
 
 ### Fixed
+- **Exact cohort selections are preserved**: an exact rE2G biosample name now wins over the
+  substring match (`lung` used to lose to the more-replicated `left lung`), an empty `--cohort`
+  is rejected instead of matching everything, and the web picker submits ontology ids. Bridge
+  rows that share a word with a biosample now name that biosample (`lung`, `pancreas`; `RCC`
+  gets a `kidney cancer` row on the RCC line), guarded by a test, so those words keep their
+  PCAWG cohorts ([#32](https://github.com/genogrove/canopy/pull/32)).
 - **The enhancer layer now works on any machine, and is pinned**: `fetch_for_targets` skipped any
   cohort whose index was absent, and nothing ever fetched one — so enhancer questions silently
   returned zero links everywhere except the machine that had built the 3 GB bundle locally. All
