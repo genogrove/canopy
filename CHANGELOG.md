@@ -141,6 +141,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#6](https://github.com/genogrove/canopy/pull/6)).
 
 ### Fixed
+- **Truncated or failed sandbox output is never rendered as an answer**: the CLI and the web UI
+  share one validator — a non-zero exit or timeout reports the traceback, output cut at the
+  sandbox cap is refused as incomplete rather than parsed into a partial table (a cut JSON line
+  used to become summary text), and a failure that also overflowed still shows its traceback
+  first ([#33](https://github.com/genogrove/canopy/pull/33)).
 - **Exact cohort selections are preserved**: an exact rE2G biosample name now wins over the
   substring match (`lung` used to lose to the more-replicated `left lung`), an empty `--cohort`
   is rejected instead of matching everything, and the web picker submits ontology ids. Bridge
