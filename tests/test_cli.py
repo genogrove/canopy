@@ -45,3 +45,28 @@ def test_resolve_cohorts_gives_both_layers_keys():
     assert cli._cohort_ids(r) == ["EFO:0001203", "EFO:0002067", "EFO:0001187"]
     with pytest.raises(SystemExit, match="no cohort matches"):
         cli._resolve_cohorts(["nonsense-tissue"])
+
+
+def test_answer_wires_the_declared_layers_for_the_resolved_cohort(monkeypatch, tmp_path):
+    """LAYERS decides what the host prepares: an SV question for a PCAWG cohort extracts that
+    cohort's table, and the script handed to the sandbox attaches it and names it in SV_COHORTS;
+    no enhancer index is touched."""
+    from genogrove_canopy import cli, llm
+    from genogrove_canopy.layers import enhancers, sv
+
+    monkeypatch.setattr(llm, "generate_query", lambda q, sp, model=None: ("BRCA-US", ["sv"], "print(1)\n"))
+    table = tmp_path / "BRCA-US.tsv"
+    table.write_text("\t".join(sv._FIELDS + ("sample", "cohort")) + "\n")
+    monkeypatch.setattr(sv, "cohort_file", lambda code: table)
+    monkeypatch.setattr(enhancers, "ensure_index", lambda c: (_ for _ in ()).throw(AssertionError("enhancers not declared")))
+    scripts = []
+
+    class _R:
+        returncode, timed_out, stdout, stderr = 0, False, "ok: 1", ""
+    args = type("A", (), {"model": "m", "show_code": False, "cohort": None, "format": "tsv"})()
+    out, err, *_ = cli._answer("SVs near MYC in BRCA-US?", system_prompt="", base="", gg="/x.gg",
+                               args=args, execute=lambda s: scripts.append(s) or _R())
+    assert err == "" and len(scripts) == 1
+    script = scripts[0]
+    assert "def attach_tracked(" in script and f'["BRCA-US", "{table}"]' in script
+    assert 'SV_COHORTS = ["BRCA-US"]' in script and "COHORTS = []" in script

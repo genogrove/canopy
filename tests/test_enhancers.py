@@ -14,21 +14,28 @@ def test_parse_cohort_targets_and_code():
     text = ('reasoning...\nCOHORT: MCF-7\n'
             'TARGETS: [{"gene": "MYC"}, {"region": "chr8:127700000-127740000"}]\n'
             "```python\nprint(1)\n```")
-    cohort, targets, code = llm.parse_targets_and_code(text)
+    cohort, layers, code = llm.parse_targets_and_code(text)
     assert cohort == "MCF-7"
-    assert targets == [{"gene": "MYC"}, {"region": "chr8:127700000-127740000"}]
+    assert layers == ["enhancers"]                    # legacy TARGETS means the enhancer layer
     assert code == "print(1)\n"
+
+
+def test_parse_layers_line():
+    cohort, layers, code = llm.parse_targets_and_code(
+        "COHORT: breast; liver\nLAYERS: enhancers; SV\n```python\nLAYERS: sv\nprint(1)\n```")
+    assert cohort == "breast; liver" and layers == ["enhancers", "sv"]
+    assert "LAYERS" not in code and code == "print(1)\n"   # a leaked declaration never reaches the sandbox
 
 
 def test_parse_none_declared_is_empty():
     # a structural (non-enhancer) reply declares nothing -> backward compatible
-    cohort, targets, code = llm.parse_targets_and_code("```python\nx = 1\n```")
-    assert cohort == "" and targets == [] and code == "x = 1\n"
+    cohort, layers, code = llm.parse_targets_and_code("```python\nx = 1\n```")
+    assert cohort == "" and layers == [] and code == "x = 1\n"
 
 
 def test_parse_malformed_targets_tolerated():
-    cohort, targets, code = llm.parse_targets_and_code("TARGETS: [not json\n```python\np()\n```")
-    assert cohort == "" and targets == [] and code == "p()\n"
+    cohort, layers, code = llm.parse_targets_and_code("TARGETS: [not json\n```python\np()\n```")
+    assert cohort == "" and layers == [] and code == "p()\n"
 
 
 @pytest.mark.parametrize("text", [
@@ -40,8 +47,8 @@ def test_parse_malformed_targets_tolerated():
     'COHORT: MCF-7\nTARGETS: [{"gene": "EGFR"}]\n```python\np()\n```',
 ])
 def test_declarations_never_leak_into_code(text):
-    cohort, targets, code = llm.parse_targets_and_code(text)
-    assert cohort == "MCF-7" and targets == [{"gene": "EGFR"}]
+    cohort, layers, code = llm.parse_targets_and_code(text)
+    assert cohort == "MCF-7" and layers == ["enhancers"]
     assert "COHORT" not in code and "TARGETS" not in code and code.strip() == "p()"
 
 

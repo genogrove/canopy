@@ -28,6 +28,7 @@ from genogrove_canopy.cli import (
     DEFAULT_MODEL,
     _BASE,
     _cohort_ids,
+    _pcawg_codes,
     _grove_context,
     _parse_output,
     _pygenogrove_site_dir,
@@ -95,24 +96,28 @@ def _pipeline(question: str, cohort: str, model: str, emit) -> dict:
     grove = _grove(model)
 
     emit("step", "Generating the pygenogrove query")
-    cohort_hint, targets, code = llm.generate_query(question, grove.system_prompt, model=grove.model)
+    cohort_hint, layers, code = llm.generate_query(question, grove.system_prompt, model=grove.model)
 
     enh_pre, note = "", None
-    if targets:
-        from genogrove_canopy.layers import enhancers
+    if layers:
+        from genogrove_canopy.layers import enhancers, sv
         # `why` is the internal reason flag; `note` is display text. Keeping them apart stops the
         # "default" sentinel leaking to the UI when a cohort resolves but finds no links.
         cohorts, why = _serve_cohorts(cohort, cohort_hint)
         note = None if why == "default" else why
-        cohort_ids = _cohort_ids(cohorts)
-        if cohort_ids:
+        cohort_links, sv_files = {}, {}
+        if "enhancers" in layers and _cohort_ids(cohorts):
             emit("step", f"Attaching enhancers for cohort(s) {'; '.join(cohorts)}")
             cohort_links = {cid: str(enhancers.links_file(cid))
-                            for cid in cohort_ids if enhancers.ensure_index(cid)}
-            if cohort_links:
-                enh_pre = preamble.build(grove.gg, cohort_links)
-                note = f"enhancers attached from {'; '.join(cohorts)}" + (
-                    " (default)" if why == "default" else "")
+                            for cid in _cohort_ids(cohorts) if enhancers.ensure_index(cid)}
+        if "sv" in layers and _pcawg_codes(cohorts):
+            emit("step", f"Attaching SVs for cohort(s) {'; '.join(_pcawg_codes(cohorts))}")
+            sv_files = {c: str(sv.cohort_file(c)) for c in _pcawg_codes(cohorts)}
+        if cohort_links or sv_files:
+            enh_pre = preamble.build(grove.gg, cohort_links, sv_files)
+            what = " + ".join(w for w, d in (("enhancers", cohort_links), ("SVs", sv_files)) if d)
+            note = f"{what} attached from {'; '.join(cohorts)}" + (
+                " (default)" if why == "default" else "")
 
     emit("step", "Running the query over the grove")
     result = grove.worker.submit("import json\n" + grove.preamble + enh_pre + code)

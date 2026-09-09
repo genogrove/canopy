@@ -177,7 +177,7 @@ def _grove_context():
     cohort's nodes and edges attached — same name, so generated code never opens a path itself.
     """
     from genogrove_canopy import layers
-    from genogrove_canopy.layers import enhancers
+    from genogrove_canopy.layers import enhancers, sv
 
     # Resolved: the sandbox compares every read against `Path.resolve()`d roots, so a symlinked
     # cache dir spelled two ways would refuse its own grove.
@@ -188,7 +188,7 @@ def _grove_context():
     )
     # The sandbox reads only these roots. `LINKS_DIR` is where `enhancers.preamble`'s
     # `attach_links` opens a cohort's links table, so it must be granted alongside the grove.
-    return block, preamble.build(gg), [gg, str(enhancers.LINKS_DIR.resolve())]
+    return block, preamble.build(gg), [gg, str(enhancers.LINKS_DIR.resolve()), str(sv.SV_DIR.resolve())]
 
 
 def resources_block(var: str, description: str, layers_block: str) -> str:
@@ -384,22 +384,10 @@ def _cohort_ids(cohorts) -> list:
     return [i for c in cohorts.values() for i in c["re2g"]]
 
 
+def _pcawg_codes(cohorts) -> list:
+    """The PCAWG project codes across the resolved ``cohorts`` (the SV cohort unit)."""
+    return [i for c in cohorts.values() for i in c["pcawg"]]
 
-def _describe_targets(targets) -> str:
-    """Name what the enhancer lookup is for, e.g. ``gene AR`` or ``2 regions``.
-
-    The model declares targets as ``{"gene": …}`` / ``{"region": …}``; a log line saying only
-    "loading enhancers" leaves the reader unable to tell a wrong-gene answer from a right one.
-    """
-    genes = [t["gene"] for t in targets if t.get("gene")]
-    regions = [t["region"] for t in targets if t.get("region")]
-    parts = []
-    if genes:
-        parts.append(f"gene{'s' if len(genes) > 1 else ''} {', '.join(genes)}")
-    if regions:
-        parts.append(f"{len(regions)} region{'s' if len(regions) > 1 else ''}"
-                     if len(regions) > 1 else f"region {regions[0]}")
-    return " and ".join(parts) or "the declared targets"
 
 
 def _answer(question, *, system_prompt, base, gg, args, execute):
@@ -418,33 +406,35 @@ def _answer(question, *, system_prompt, base, gg, args, execute):
     """
     log.say(f"Generating a pygenogrove query ({args.model})")
     t0 = time.perf_counter()
-    cohort_hint, targets, code = llm.generate_query(question, system_prompt, model=args.model)
+    cohort_hint, layers, code = llm.generate_query(question, system_prompt, model=args.model)
     gen_s = time.perf_counter() - t0
     log.took("Query generated", gen_s)
     if args.show_code:
         print("# --- generated code ---", file=sys.stderr)
         print(code, file=sys.stderr)
     enh_pre, enh_s = "", 0.0
-    if targets:  # an enhancer/regulation question — resolve the cohort(s) and attach their links
-        from genogrove_canopy.layers import enhancers
+    if layers:  # a per-question layer was declared — resolve the cohort(s), prepare its data
+        from genogrove_canopy.layers import enhancers, sv
         cohorts, note = _resolve_query_cohorts(args, cohort_hint)
-        cohort_ids = _cohort_ids(cohorts)
-        cohort_links = {}
-        if cohort_ids:  # announce only once there is somewhere to load from
-            log.say(f"Loading ENCODE-rE2G links for {_describe_targets(targets)} — "
-                    f"cohort(s) {'; '.join(cohorts)}")
-            t_enh = time.perf_counter()
+        cohort_links, sv_files = {}, {}
+        t_enh = time.perf_counter()
+        if "enhancers" in layers and _cohort_ids(cohorts):
+            log.say(f"Loading ENCODE-rE2G links — cohort(s) {'; '.join(cohorts)}")
             cohort_links = {cid: str(enhancers.links_file(cid))
-                            for cid in cohort_ids if enhancers.ensure_index(cid)}
-            enh_s = time.perf_counter() - t_enh
-        if cohort_links:
-            enh_pre = preamble.build(gg, cohort_links)
+                            for cid in _cohort_ids(cohorts) if enhancers.ensure_index(cid)}
+        if "sv" in layers and _pcawg_codes(cohorts):
+            log.say(f"Loading PCAWG SVs — cohort(s) {'; '.join(_pcawg_codes(cohorts))}")
+            sv_files = {code_: str(sv.cohort_file(code_)) for code_ in _pcawg_codes(cohorts)}
+        enh_s = time.perf_counter() - t_enh
+        if cohort_links or sv_files:
+            enh_pre = preamble.build(gg, cohort_links, sv_files)
             src = " (default — name a tissue or pass --cohort)" if note == "default" else ""
-            log.took(f"rE2G: attached {'; '.join(cohorts)}{src}", enh_s)
+            what = " + ".join(w for w, d in (("rE2G", cohort_links), ("SV", sv_files)) if d)
+            log.took(f"{what}: attached {'; '.join(cohorts)}{src}", enh_s)
         elif note and note != "default":
             log.say(note)
-        elif cohort_ids:
-            log.took("rE2G: no index available for those cohorts", enh_s)
+        elif cohorts:
+            log.say(f"no {' / '.join(layers)} data for cohort(s) {'; '.join(cohorts)} — nothing attached")
     # JSONL is the output contract, so guarantee `json` is importable even if the
     # generated code forgets the import (it's already in the allowlist).
     log.say("Running the query over the grove")

@@ -100,7 +100,7 @@ def test_cohort_default_flag_is_not_display_text(monkeypatch):
         "worker": type("W", (), {"submit": lambda s, c: type("R", (), {
             "returncode": 0, "timed_out": False, "stdout": "ok: 1", "stderr": ""})()})()})())
     monkeypatch.setattr(serve.llm, "generate_query",
-                        lambda q, sp, model=None: ("", [{"gene": "MYC"}], "pass"))
+                        lambda q, sp, model=None: ("", ["enhancers"], "pass"))
     from genogrove_canopy.layers import enhancers
     monkeypatch.setattr(enhancers, "ensure_index", lambda cohort: False)
 
