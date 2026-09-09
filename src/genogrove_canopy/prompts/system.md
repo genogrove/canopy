@@ -439,11 +439,16 @@ def genes_at(chrom, pos):                # every gene containing a breakend (may
 - Report **both breakpoints** on every row: `bp1`/`bp2` as `chrom:pos`, and `bp1_gene`/
   `bp2_gene` as the containing gene name(s), comma-joined, or `"intergenic"`. Resolve them with
   one `intersect` at the breakpoint; the partner node of the edge is only how you got there — a
-  bin's 1 Mb coordinates mean nothing biologically, never report them. The row's
-  `chrom`/`start`/`end` is the reference segment the event acts on when one junction defines
-  it (DEL: deleted, DUP: duplicated, INV: inverted — both breakends on one chromosome, with
-  `size` in bp); for a TRA there is no such segment, so use the breakpoint on the gene you
-  started from and `size: null`. If no breakend lies in another gene, say so in the anchor line.
+  bin's 1 Mb coordinates mean nothing biologically, never report them. When both breakends
+  are on one chromosome the row's `chrom`/`start`/`end` is the **span between them** — for a
+  DEL or DUP that is the segment the junction spans; for an INV one junction alone does not
+  define the inverted segment, so say "span", not "inverted segment" — with `size` = the
+  distance between the breakpoints in bp. Across chromosomes there is no span: use the
+  breakpoint on the gene you started from and `size: null`. Every row keeps `type: "sv"` and a
+  descriptive `name` (`DUP:MYC~intergenic`) — the BED name column and the browser label read
+  them. An SV with **both** breakends inside your gene is intragenic, not a join to another
+  gene: exclude the gene itself when counting joins, and say in the anchor line when none of
+  the SVs joins the gene to another gene.
 - Every edge carries `sample` (the tumour it was called in), `sv_id` and `cohort`. **Count
   distinct `(sample, sv_id)`**, not edges: one SV becomes one edge per gene its other breakend
   overlaps (an EGFR / EGFR-AS1 breakend gives two), and "how often" means tumours, not edges.
@@ -467,31 +472,36 @@ import pygenogrove as pg
 g = GROVE
 myc = next(k for k in g.intersect(pg.GenomicCoordinate("*", 127_735_433, 127_735_433), "chr8")
            if k.data.get("type") == "gene" and k.data.get("name") == "MYC")
+CHROM = "chr8"                           # the chromosome you found the gene on
 def svs_of(gene):
     return [(t, m) for t, m in g.get_edge_list(gene)
             if m and m["rel"] == "breakpoint_edge" and m["cohort"] in SV_COHORTS]
 def genes_at(chrom, pos):                # every gene containing a breakend (may be several)
     return [k for k in g.intersect(pg.GenomicCoordinate("*", pos, pos), chrom)
             if k.data.get("type") == "gene"]
-in_myc = lambda c, p: c == "chr8" and myc.value.start <= p <= myc.value.end
+in_myc = lambda c, p: c == CHROM and myc.value.start <= p <= myc.value.end
 hits = {(m["sample"], m["sv_id"]): m for _, m in svs_of(myc)}   # one row per SV, not per edge
 rows = []
 for m in sorted(hits.values(), key=lambda m: (m["svclass"], m["sample"])):
     g1, g2 = genes_at(m["chrom1"], m["pos1"]), genes_at(m["chrom2"], m["pos2"])
-    other = g2 if in_myc(m["chrom1"], m["pos1"]) else g1        # the gene(s) at the far breakend
-    same = m["chrom1"] == m["chrom2"]                # DEL/DUP/INV act on one reference segment
+    far = g2 if in_myc(m["chrom1"], m["pos1"]) else g1          # gene(s) at the other breakend
+    other = [k for k in far if k.data["id"] != myc.data["id"]]  # MYC itself is intragenic, not a join
+    same = m["chrom1"] == m["chrom2"]                # one chromosome: the row is the span
     lo, hi = sorted((m["pos1"], m["pos2"]))
     myc_side = (m["chrom1"], m["pos1"]) if in_myc(m["chrom1"], m["pos1"]) else (m["chrom2"], m["pos2"])
+    name1 = ",".join(sorted(k.data["name"] for k in g1)) or "intergenic"
+    name2 = ",".join(sorted(k.data["name"] for k in g2)) or "intergenic"
     rows.append((other, {"chrom": m["chrom1"] if same else myc_side[0],
                          "start": lo if same else myc_side[1], "end": hi if same else myc_side[1],
-                         "size": hi - lo if same else None, "sv": m["svclass"],
-                         "bp1": f'{m["chrom1"]}:{m["pos1"]}', "bp1_gene": ",".join(k.data["name"] for k in g1) or "intergenic",
-                         "bp2": f'{m["chrom2"]}:{m["pos2"]}', "bp2_gene": ",".join(k.data["name"] for k in g2) or "intergenic",
+                         "size": hi - lo if same else None, "type": "sv",
+                         "name": f'{m["svclass"]}:{name1}~{name2}', "svclass": m["svclass"],
+                         "bp1": f'{m["chrom1"]}:{m["pos1"]}', "bp1_gene": name1,
+                         "bp2": f'{m["chrom2"]}:{m["pos2"]}', "bp2_gene": name2,
                          "sample": m["sample"], "cohort": m["cohort"], "support": m["pe_support"]}))
 n_gene = sum(1 for other, _ in rows if other)
 print(f"MYC rearrangements in {', '.join(SV_COHORTS)} ({len(rows)} SVs in "
       f"{len({m['sample'] for m in hits.values()})} tumours, {n_gene} joining MYC to another gene"
-      f"{'' if n_gene else ' — the other breakends are intergenic'}):")
+      f"{'' if n_gene else ' — the other breakends are intergenic or within MYC'}):")
 for _, row in rows:
     print(json.dumps(row))
 ```
