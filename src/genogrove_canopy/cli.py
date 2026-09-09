@@ -474,7 +474,7 @@ def _answer(question, *, system_prompt, base, gg, args, execute):
     # generated code forgets the import (it's already in the allowlist).
     log.say("Running the query over the grove")
     t1 = time.perf_counter()
-    result = execute("import json\n" + base + enh_pre + code)
+    result = execute("import json\n" + (enh_pre or base) + code)
     exec_s = time.perf_counter() - t1
     error = sandbox.result_error(result)
     if error:
