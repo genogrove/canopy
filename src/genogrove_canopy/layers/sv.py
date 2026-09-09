@@ -29,10 +29,12 @@ describe the hg19 call. ``junction_class`` describes the current coordinates/str
 DEL-like, DUP-like, h2hINV, t2tINV, or TRA (INS retains its explicit call). This junction
 geometry can differ after liftover and does not establish copy number or functional effect.
 
-Ephemeral, per sample: ``attach_tracked`` inserts into an already-deserialized grove and
-returns exactly what it added (edges and any new bins); ``detach`` removes that and only
-that, so one warm backbone (``sandbox.py``'s ``Worker``/``_CANOPY_STATE``) is reused
-across samples without ever holding two samples' rearrangements at once.
+Attached per question by **tumour cohort** (``cohort_file`` extracts one PCAWG project
+code's samples into a plain table; ``attach_tracked`` inserts its edges into an
+already-deserialized grove, additively — a warm session holds every cohort asked about,
+and edges carry ``cohort`` and ``sample`` so the generated code filters on ``SV_COHORTS``).
+``attach_tracked`` returns exactly what it created and ``detach`` removes that and nothing
+else, for a caller that needs a clean working copy.
 """
 
 from __future__ import annotations
@@ -121,9 +123,8 @@ def attach(grove, records) -> int:
     the ``_FIELDS`` above (and ``"cohort"``, carried onto the edge when present); one
     call may hold many samples — a whole cohort. Returns the number of SVs attached.
 
-    Ephemeral by construction, but this entry point doesn't track what it created
-    — use ``attach_tracked`` when the grove is a warm copy that will be reused for
-    a *different* sample afterward, so ``detach`` can clean up first.
+    This entry point doesn't track what it created — use ``attach_tracked`` when a
+    caller may need ``detach`` later.
 
     **Shipped into the sandbox as source text** (same self-contained-function
     convention as ``enhancers.attach_links``): everything it needs is imported

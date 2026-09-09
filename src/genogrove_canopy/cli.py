@@ -172,7 +172,7 @@ def _grove_context():
     the ENCODE cCRE registry, built into the pinned artifact rather than baked on first run (see
     ``resources.ensure_all_grove``). The preamble binds ``GROVE`` to an open ``GroveView`` of it,
     so one `intersect` returns genes *and* cCREs. The enhancer layer is **not** in the artifact
-    (it is cohort-specific): when the model declares ``COHORT``/``TARGETS``, ``_answer`` appends
+    (it is cohort-specific): when the model declares ``COHORT``/``LAYERS``, ``_answer`` appends
     ``preamble.build(gg, cohort_links)``, which rebinds ``GROVE`` to a mutable copy with that
     cohort's nodes and edges attached — same name, so generated code never opens a path itself.
     """
@@ -436,7 +436,7 @@ def _answer(question, *, system_prompt, base, gg, args, execute):
     attach sits between code-gen and execution, and leaving it out made the reported total
     wrong by however long it took.
 
-    The enhancer layer is resolved **per question**: the model declares ``COHORT``/``TARGETS``,
+    Per-question layers are resolved **per question**: the model declares ``COHORT``/``LAYERS``,
     the host grounds the cohort(s) (``--cohort`` overrides, repeatable), and each cohort's links
     are attached onto the mutable grove in the sandbox — reused warm across turns via
     ``_CANOPY_STATE`` — rather than fetched per target and injected as a list.
@@ -543,7 +543,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         # The grove is cohort-independent (GENCODE + cCREs). Enhancers are resolved
-        # per question from the model's declared COHORT/TARGETS — see _answer.
+        # per question from the model's declared COHORT/LAYERS — see _answer.
         _prepare()
         resources_block, preamble, data_paths = _grove_context()
         site_dir = _pygenogrove_site_dir()
