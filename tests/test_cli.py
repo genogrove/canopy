@@ -119,3 +119,17 @@ def test_bridge_table_keys_exist_in_both_catalogs():
     # the plain tissue word means the tissue biosample where rE2G has one; the disease word the line
     assert cli._resolve_cohorts(["liver"])["liver"]["re2g"] == ["UBERON:0002107"]
     assert cli._resolve_cohorts(["HCC"])["liver cancer"]["re2g"] == ["EFO:0001187"]
+
+
+@pytest.mark.parametrize("spec", ["", " ", "\t"])
+def test_empty_explicit_cohort_is_rejected(spec):
+    from genogrove_canopy.cli import _resolve_cohorts
+    with pytest.raises(SystemExit, match="empty cohort"):
+        _resolve_cohorts([spec])
+
+
+def test_every_catalogue_name_resolves_to_its_own_biosample():
+    from genogrove_canopy import cli, resources
+    for cohort in resources.re2g_cohorts():
+        result = cli._resolve_cohorts([" " + cohort["name"].swapcase() + " "])
+        assert cli._cohort_ids(result) == [cohort["ontology_id"]], cohort["name"]
