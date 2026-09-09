@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Smoke tests for the CLI skeleton."""
 
+import pytest
+
 from genogrove_canopy.cli import build_parser, main
 
 
