@@ -462,14 +462,10 @@ async function loadCohorts(){
     const r = await fetch("/cohorts"); const d = await r.json();
     sel.innerHTML = "";
     const none = new Option("GENCODE only (auto-add enhancers)", ""); sel.add(none);
-    let flagship = "";
     for(const c of d.cohorts){
-      const o = new Option(`${c.name} · ${c.n_replicates} rep`, c.name);
-      if(c.ontology_id === d.default) flagship = c.name;
-      sel.add(o);
+      sel.add(new Option(`${c.name} · ${c.n_replicates} rep`, c.ontology_id));
     }
     sel.value = ""; // default: let the server pick the flagship on enhancer questions
-    sel.dataset.flagship = flagship;
   } catch(e){ /* offline cohort list; the empty option still works */ }
 }
 

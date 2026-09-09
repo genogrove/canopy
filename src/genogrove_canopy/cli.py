@@ -119,8 +119,9 @@ def _resolve_cohorts(specs):
     ``{label: {"re2g": [ontology ids], "pcawg": [project codes]}}``.
 
     Each spec resolves, in order, as: a layer key as written (an rE2G ontology id, a PCAWG
-    project code); a bridge term or alias (``data/cohorts.tsv`` — one tissue word gives both
-    layers' keys, which is what lets one ``COHORT:`` line drive enhancers *and* SVs); or a
+    project code); an exact rE2G biosample name (a bridge row for the same word adds its PCAWG
+    codes); a bridge term or alias (``data/cohorts.tsv`` — one tissue word gives both layers'
+    keys, which is what lets one ``COHORT:`` line drive enhancers *and* SVs); or a
     case-insensitive substring of an rE2G biosample name (most-replicated match wins). Raises
     ``SystemExit`` with a pointer to ``--list-cohorts`` on no match.
     """
@@ -129,6 +130,8 @@ def _resolve_cohorts(specs):
     chosen = {}
     for spec in specs:
         s = spec.strip().lower()
+        if not s:
+            raise SystemExit("canopy: empty cohort — see --list-cohorts")
         hit = next((c for c in catalog if c["ontology_id"].lower() == s), None)
         if hit:
             chosen[hit["name"]] = {"re2g": [hit["ontology_id"]], "pcawg": []}
@@ -136,7 +139,12 @@ def _resolve_cohorts(specs):
         if spec.strip().upper() in pcawg:
             chosen[spec.strip().upper()] = {"re2g": [], "pcawg": [spec.strip().upper()]}
             continue
+        exact = next((c for c in catalog if c["name"].strip().lower() == s), None)
         row = next((r for r in _bridge() if s == r["term"] or s in (a.lower() for a in r["aliases"])), None)
+        if exact:  # a bridge row for the same word names this very biosample (tested), so its
+            chosen[exact["name"]] = {"re2g": [exact["ontology_id"]],  # PCAWG codes come along
+                                     "pcawg": row["pcawg"] if row else []}
+            continue
         if row:
             chosen[row["term"]] = {"re2g": row["re2g"], "pcawg": row["pcawg"]}
             continue
