@@ -136,7 +136,7 @@ def attach(grove, records) -> int:
 
 def attach_tracked(grove, records, bin_size=1_000_000):  # literal: the def runs in the sandbox
     """Same as ``attach``, but also returns every edge and bin it created — as
-    ``("edge", a, b)`` and ``("key", index, Key)`` entries — so ``detach`` can remove
+    ``("edge", a, b, payload)`` and ``("key", index, Key)`` entries — so ``detach`` can remove
     exactly what this call added and nothing shared with a later sample.
 
     **Shipped into the sandbox as source text** (see ``preamble.build``): self-contained by
@@ -161,7 +161,7 @@ def attach_tracked(grove, records, bin_size=1_000_000):  # literal: the def runs
                         and k.value.start == bin_start), None)
         if key is None:
             key = grove.insert(chrom, pg.GenomicCoordinate(".", bin_start, bin_start + bin_size - 1),
-                               {"type": "intergenic_region"})
+                               {"type": "intergenic_region", "_sv_owned": True})
             created.append(("key", chrom, key))
         bins[(chrom, bin_start)] = key
         return [key]
@@ -203,30 +203,53 @@ def attach_tracked(grove, records, bin_size=1_000_000):  # literal: the def runs
                 grove.add_edge(a, b, edge)
                 if a is not b:  # both breakends in one gene/bin: one self-edge, not two
                     grove.add_edge(b, a, edge)
-                created.append(("edge", a, b))
+                created.append(("edge", a, b, edge))
         n += 1
     return n, created
 
 
 def detach(grove, created) -> None:
-    """Remove exactly what one ``attach_tracked`` call added: its breakpoint edges (both
-    directions), then any bin nodes it created. Gene nodes are never touched.
+    """Remove this attachment's edge multiplicities, then its unused SV-owned bins.
 
-    ponytail: ``remove_edge(a, b)`` drops the *first* edge between the pair, so this relies on
-    no other layer putting an edge between two anchors — true today (backbone edges are
-    gene→transcript→exon, enhancer edges are enhancer↔gene, bins have only ours). If a
-    gene↔gene layer ever lands, remove by predicate on ``sample`` instead.
+    The bindings decode payloads by value. Match the full payload and target, consuming one
+    occurrence per tracked directed edge; identical calls retain the other copy. Bins shared
+    by later attachments survive until their last edge is detached, in either detach order.
     """
-    for entry in created:
-        if entry[0] == "edge":
-            _, a, b = entry
-            grove.remove_edge(a, b)
-            if a is not b:
-                grove.remove_edge(b, a)
+    import json
+    from collections import Counter
+
+    outgoing = {}
+    bins = {}
     for entry in created:
         if entry[0] == "key":
-            _, index, key = entry
-            grove.remove_key(index, key)
+            _, chrom, key = entry
+            bins[id(key)] = (chrom, key)
+            continue
+        _, a, b, payload = entry
+        directions = [(a, b)] if a is b else [(a, b), (b, a)]
+        for source, target in directions:
+            _, counts = outgoing.setdefault(id(source), (source, Counter()))
+            counts[(id(target), json.dumps(payload, sort_keys=True))] += 1
+        for key, chrom in ((a, payload["chrom1"]), (b, payload["chrom2"])):
+            if key.data.get("_sv_owned"):
+                bins[id(key)] = (chrom, key)
+
+    # The pinned API cannot remove a selected parallel edge from one source. Rebuild only
+    # affected adjacency lists, retaining other attachments and their original order.
+    for source, counts in outgoing.values():
+        keep = []
+        for target, payload in grove.get_edge_list(source):
+            match = (id(target), json.dumps(payload, sort_keys=True))
+            if counts[match]:
+                counts[match] -= 1
+            else:
+                keep.append((target, payload))
+        grove.remove_edges_from(source)
+        for target, payload in keep:
+            grove.add_edge(source, target, payload)
+    for chrom, key in bins.values():
+        if not grove.get_edge_list(key) and not grove.get_in_edge_list(key):
+            grove.remove_key(chrom, key)
 
 
 LAYER = Layer(
