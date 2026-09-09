@@ -1,62 +1,29 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Sandboxed execution of LLM-generated Python.
 
-**Security-critical.** The code passed to :func:`run` is produced by a language
-model and is treated as untrusted. It is executed out-of-process under several
-layers of restriction.
+Generated code runs in a separate interpreter with a stripped environment, import
+allowlist, read-only dataset grants, resource limits and a parent-enforced deadline.
+After trusted imports and before query execution, macOS Seatbelt or Linux Landlock
+restricts filesystem access for Python and native bindings alike. Initialization
+failure stops execution; no Python-only fallback is offered. The installed policy
+cannot be lifted by query code. Only existing data roots are granted on Linux.
 
-Threat model
-------------
-The realistic adversary here is *LLM-generated code* — code the model wrote to
-answer a genomics question, possibly buggy or accidentally dangerous (a runaway
-loop, an unintended network call, a stray file write), not a human deliberately
-crafting an escape. The guarantees below are sized to that model.
+Python open guards provide useful errors and cover cached I/O entry points. The OS
+policy also denies native reads outside the grants and file writes, creation, deletion
+and truncation. RLIMIT_FSIZE alone does not prevent truncating an existing file.
+Trusted modules are loaded before the policy; inherited stdin/stdout/stderr remain
+available for the execution protocol. File metadata is not treated as secret.
 
-What is enforced by the parent / the OS (a child cannot lift these)
--------------------------------------------------------------------
-* **Out-of-process.** The code runs in a separate interpreter (``subprocess``),
-  never via in-process ``exec``/``eval``.
-* **Stripped environment.** The child gets a minimal env — no secrets such as
-  ``ANTHROPIC_API_KEY`` are reachable even if the in-child guards are defeated.
-* **Resource caps** (POSIX ``setrlimit`` in a pre-exec hook): CPU seconds,
-  address space (memory), ``RLIMIT_FSIZE = 0`` (no file *writes* of any size),
-  and an open-file-descriptor cap. These can only be *lowered* by the child.
-* **Wall-clock kill.** The child runs in its own session; on timeout the whole
-  process group is killed.
-* **Output-size cap.** stdout/stderr are read with a byte cap so a flood cannot
-  exhaust the parent's memory.
-
-In-child guards (strong against generated code; defense-in-depth)
------------------------------------------------------------------
-A bootstrap prelude prepended to the code:
-
-* installs an **import allowlist** (``pygenogrove`` + a small compute-only set),
-* **scrubs** the dangerous primitives the interpreter preloads (``posix``,
-  ``marshal``, and the network/exec extension modules) from ``sys.modules`` so a
-  later ``import os`` / ``socket`` / ``subprocess`` is refused at ``find_spec``,
-  before any loader runs — so **network has no path through the import system**
-  (no ``socket``/``_socket``/``ctypes`` can be imported), and
-* replaces ``open`` with a **read-only** variant restricted to registry-resolved
-  data roots.
-
-Residual risk
--------------
-The in-child guards run in the same interpreter as the untrusted code, so they
-are *not* adversary-proof: code that removes the guard from ``sys.meta_path`` and
-imports the built-in ``posix``, or reaches the import machinery's private ``os``
-reference, can call ``posix.system`` and from there shell out (which is also a
-network path). That is out of scope for the in-child layer by design — the
-**parent/OS layer** (stripped env, rlimits, ``RLIMIT_FSIZE=0``, session-kill,
-output cap) is the hard boundary, and it holds regardless. True isolation against
-a hostile child needs an OS-level backend (seccomp-bpf blocking ``execve`` /
-``socket`` / network + mount namespaces / a container / an unprivileged jail);
-that is the documented next step, and the architecture keeps it pluggable (it
-would wrap the same ``subprocess`` invocation). The threat model the in-child
-layer is sized to is LLM-generated code, not a human crafting escapes.
+The threat model is buggy or accidentally dangerous generated code, not a deliberate
+interpreter escape. Network and import restrictions remain interpreter guards; code
+that deliberately recovers hidden interpreter internals can bypass those guards.
+This is not a general hostile-code container. Memory limits are best effort (not
+settable on macOS); Worker output capture has its own documented limitations.
 """
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import select
@@ -70,6 +37,8 @@ import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+
+from genogrove_canopy._filesystem import restrict_filesystem
 
 try:  # POSIX-only; resource caps are skipped (with a weaker guarantee) elsewhere.
     import resource
@@ -146,6 +115,12 @@ for _m in _ALLOW:
     except Exception:
         pass
 
+# Enforce native and Python filesystem access before any generated code executes.
+# Warm the text codecs used by the query contract before file reads are restricted.
+import encodings.ascii, encodings.utf_8
+restrict_filesystem(_ROOTS)
+del restrict_filesystem
+
 # 2) Scrub the dangerous primitives (preloaded, or pulled in while warming a
 #    trusted module). Popping a name forces any later `import` of it back through
 #    the allowlist guard below, which refuses it — so `import os` / `socket` /
@@ -177,7 +152,7 @@ class _Guard:
 _sys.meta_path.insert(0, _Guard())
 
 # 4) Read-only open, restricted to registry-resolved data roots. Writes are
-#    refused here (and RLIMIT_FSIZE=0 enforces it at the OS level regardless).
+#    refused here; the OS filesystem policy also covers native bindings.
 _real_open = _builtins.open
 
 def _norm(p):
@@ -208,6 +183,20 @@ def _guarded_open(file, mode="r", *args, **kwargs):
 
 _builtins.open = _guarded_open
 
+# Audit events cover io.open, io.FileIO and cached aliases of Python's open.
+# The OS policy above also covers native readers and symlinks out of granted roots.
+def _audit_open(event, args):
+    if event != "open":
+        return
+    file, mode, flags = args
+    if flags & _WRITE_FLAGS:
+        raise PermissionError("the sandbox is read-only")
+    target = _norm(file)
+    if not any(target == r or target.startswith(r + "/") for r in _ROOTS):
+        raise PermissionError("reads are restricted to registry data paths: %r" % (file,))
+
+_sys.addaudithook(_audit_open)
+
 # ----- end bootstrap; untrusted code follows -----
 '''
 
@@ -215,11 +204,12 @@ _builtins.open = _guarded_open
 def _build_script(code: str, roots: list[str], syspath: list[str]) -> str:
     """Prepend the bootstrap (with the allowlist, data roots, and site path baked in)."""
     header = (
+        f"_WRITE_FLAGS = {os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND}\n"
         f"_ALLOW_JSON = {json.dumps(sorted(ALLOWED_IMPORTS))}\n"
         f"_ROOTS_JSON = {json.dumps(roots)}\n"
         f"_SYSPATH_JSON = {json.dumps(syspath)}\n"
     )
-    return header + _BOOTSTRAP + "\n" + code
+    return header + inspect.getsource(restrict_filesystem) + "\n" + _BOOTSTRAP + "\n" + code
 
 
 def _child_env() -> dict[str, str]:
@@ -252,7 +242,7 @@ def _apply_limits(timeout_s: float) -> None:  # pragma: no cover - runs in child
     cpu = int(timeout_s) + 1
     _setrlimit(resource.RLIMIT_CPU, cpu)
     _setrlimit(resource.RLIMIT_AS, _DEFAULT_MEMORY_BYTES)
-    _setrlimit(resource.RLIMIT_FSIZE, 0)  # no file writes of any size
+    _setrlimit(resource.RLIMIT_FSIZE, 0)  # defense in depth; not a truncation guard
     _setrlimit(resource.RLIMIT_NOFILE, _MAX_OPEN_FDS)
 
 
@@ -390,9 +380,8 @@ def _kill(proc: subprocess.Popen) -> None:
 #     worker after a few queries. The per-query bound is a *wall-clock* deadline
 #     enforced by the parent: on overrun the worker is killed and transparently
 #     restarted (losing the warm groves). This keeps the hard timeout guarantee.
-#   * The worker's own infra modules (io/struct/traceback) are imported before the
-#     guard, so they stay importable by query code — pure compute, no os/net/exec,
-#     so the boundary is unchanged.
+#   * Worker infra modules (io/struct/traceback) are imported before the guards.
+#     Their I/O paths remain subject to the audit hook and OS filesystem policy.
 # Protocol: length-prefixed frames over the worker's stdin (request = query code)
 # and stdout (response = JSON {stdout, stderr, rc}); query prints are captured into
 # buffers, so the real stdout carries only the protocol.
@@ -472,12 +461,26 @@ class _ProtoError(Exception):
 
 def _build_worker_script(roots: list[str], syspath: list[str], output_cap: int) -> str:
     header = (
+        f"_WRITE_FLAGS = {os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND}\n"
         f"_ALLOW_JSON = {json.dumps(sorted(ALLOWED_IMPORTS))}\n"
         f"_ROOTS_JSON = {json.dumps(roots)}\n"
         f"_SYSPATH_JSON = {json.dumps(syspath)}\n"
         f"_OUTPUT_CAP = {int(output_cap)}\n"
     )
-    return header + _WORKER_INFRA + _BOOTSTRAP + "\n" + _WORKER_LOOP
+    bootstrap = _BOOTSTRAP.replace("restrict_filesystem(_ROOTS)\n", """try:
+    restrict_filesystem(_ROOTS)
+except Exception as _error:
+    _message = _json.dumps({"error": str(_error)}).encode("utf-8")
+    _sys.__stdout__.buffer.write(_struct.pack(">I", len(_message)) + _message)
+    _sys.__stdout__.buffer.flush()
+    raise SystemExit(1)
+""")
+    ready = """_message = _json.dumps({"ready": True}).encode("utf-8")
+_sys.__stdout__.buffer.write(_struct.pack(">I", len(_message)) + _message)
+_sys.__stdout__.buffer.flush()
+"""
+    return (header + inspect.getsource(restrict_filesystem) + "\n" + _WORKER_INFRA
+            + bootstrap + "\n" + ready + _WORKER_LOOP)
 
 
 def _apply_worker_limits() -> None:  # pragma: no cover - runs in child
@@ -526,6 +529,15 @@ class Worker:
             bufsize=0, cwd=self._tmp, env=_child_env(),
             preexec_fn=_apply_worker_limits if os.name == "posix" else None,
         )
+        try:
+            ready = self._read_frame(DEFAULT_TIMEOUT_S)
+            if ready.get("error"):
+                raise RuntimeError(ready["error"])
+            if ready != {"ready": True}:
+                raise _ProtoError("worker did not initialize")
+        except BaseException:
+            self.close()
+            raise
 
     def _restart(self) -> None:
         if self._proc is not None:

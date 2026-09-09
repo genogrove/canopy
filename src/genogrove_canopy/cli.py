@@ -182,6 +182,9 @@ def _grove_context():
     # Resolved: the sandbox compares every read against `Path.resolve()`d roots, so a symlinked
     # cache dir spelled two ways would refuse its own grove.
     gg = str(resources.ensure_all_grove(_BASE).resolve())
+    # Landlock grants directories by inode; create layer roots before the worker starts.
+    enhancers.LINKS_DIR.mkdir(parents=True, exist_ok=True)
+    sv.SV_DIR.mkdir(parents=True, exist_ok=True)
     block = resources_block(
         "GROVE", resources.RESOURCES[_BASE].description,
         layers.catalogue_block(["ccre", "enhancers", "sv"]),
