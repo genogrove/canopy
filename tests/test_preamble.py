@@ -48,11 +48,14 @@ def _run_preamble(cohort_links, state, events, sv_files=None):
         "GroveView": _GroveView})
     pre = preamble.build("/tmp/x.gg", cohort_links, sv_files)
     body = pre.split("import pygenogrove as pg\n", 1)[1].replace(
-        "        attach_links(_grove, _path, _c, _state['nodes'])",
-        "        events.append(('attach', _c, id(_state['nodes'])))").replace(
-        "        with open(_path) as _fh:\n            attach_tracked(_grove, read_table(_fh))",
-        "        events.append(('sv', _c))")
-    g = {"_CANOPY_STATE": state, "__builtins__": __builtins__, "pg": pg, "events": events}
+        "            attach_links(_grove, _path, _c, _state['nodes'])",
+        "            events.append(('attach', _c, id(_state['nodes'])))").replace(
+        "            with open(_path) as _fh:\n                attach_tracked(_grove, read_table(_fh))",
+        "            events.append(('sv', _c)) or _fail(_c)")
+    def _fail(c):
+        if c == "BAD":
+            raise ValueError("malformed row")
+    g = {"_CANOPY_STATE": state, "__builtins__": __builtins__, "pg": pg, "events": events, "_fail": _fail}
     exec(body, g)
     return g
 
@@ -104,3 +107,14 @@ def test_preamble_hides_the_worker_state_and_hands_out_a_read_only_view():
     with pytest.raises(AttributeError):
         view.insert("chr1", None, {})                        # mutators do not
     assert state["grove"].size() == 1                        # ...so the memoised grove is untouched
+
+
+def test_preamble_drops_the_memo_when_an_attach_fails():
+    """A cohort is marked attached only after its attach returned; a failure halfway must not
+    leave a half-mutated grove that the next query attaches onto again (duplicate edges)."""
+    events, state = [], {}
+    _run_preamble({"C": "/tmp/c.tsv"}, state, events)
+    assert state["cohorts"] == {"C"}
+    with pytest.raises(ValueError, match="malformed row"):
+        _run_preamble({"C": "/tmp/c.tsv"}, state, events, {"BAD": "/tmp/bad.tsv"})
+    assert state == {}                                           # next query rebuilds from scratch

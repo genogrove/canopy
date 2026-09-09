@@ -54,15 +54,22 @@ def build(gg: str, cohort_links: dict[str, str] | None = None,
         f"    _state.update(gg={gg_lit}, grove=pg.Grove.deserialize({gg_lit}),\n"
         "                  nodes={}, cohorts=set(), sv_cohorts=set())\n"
         "_grove = _state['grove']\n"
-        f"for _c, _path in {json.dumps(sorted((cohort_links or {}).items()))}:\n"
-        "    if _c not in _state['cohorts']:\n"            # attach onto the warm grove, once
-        "        attach_links(_grove, _path, _c, _state['nodes'])\n"
-        "        _state['cohorts'].add(_c)\n"
-        f"for _c, _path in {json.dumps(sorted((sv_files or {}).items()))}:\n"
-        "    if _c not in _state['sv_cohorts']:\n"
-        "        with open(_path) as _fh:\n"
-        "            attach_tracked(_grove, read_table(_fh))\n"
-        "        _state['sv_cohorts'].add(_c)\n"
+        # A cohort is marked attached only after its attach returned, so an exception halfway
+        # would leave a half-mutated grove that the next query attaches onto again: drop the
+        # memo entirely on failure and let the next query rebuild.
+        "try:\n"
+        f"    for _c, _path in {json.dumps(sorted((cohort_links or {}).items()))}:\n"
+        "        if _c not in _state['cohorts']:\n"        # attach onto the warm grove, once
+        "            attach_links(_grove, _path, _c, _state['nodes'])\n"
+        "            _state['cohorts'].add(_c)\n"
+        f"    for _c, _path in {json.dumps(sorted((sv_files or {}).items()))}:\n"
+        "        if _c not in _state['sv_cohorts']:\n"
+        "            with open(_path) as _fh:\n"
+        "                attach_tracked(_grove, read_table(_fh))\n"
+        "            _state['sv_cohorts'].add(_c)\n"
+        "except BaseException:\n"
+        "    _state.clear()\n"
+        "    raise\n"
         f"COHORTS = {json.dumps(cohorts)}\n"               # this question's cohorts, by layer key
         f"SV_COHORTS = {json.dumps(svs)}\n"
         # The memoised grove is a mutable `Grove` shared by every query of the session. Hand the
