@@ -7,6 +7,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **SV layer reachable from a question, one cohort vocabulary for both layers**: the model
+  declares `COHORT: <term>` and `LAYERS: enhancers; sv` (`LAYERS` replaces the unused-content
+  `TARGETS`); the host resolves the term through a curated bridge (`data/cohorts.tsv`: a tissue
+  word gives the rE2G biosample id *and* the PCAWG project codes) and attaches exactly the
+  declared layers into the warm grove, echoing `COHORTS` / `SV_COHORTS` into the sandbox for
+  filtering. PCAWG tumour cohorts (47 ICGC project codes, from the pinned sample sheet via
+  `tools/build_pcawg_cohorts.py` → packaged `data/pcawg_cohorts.tsv`) are the SV loading unit:
+  `sv.cohort_file` extracts one into a plain table, `attach_tracked` carries sample and cohort
+  per edge (BRCA-US: 89 tumours, 28,927 SVs, attached in 1.9 s). The preamble moves to
+  `preamble.py`; `--list-cohorts` prints the terms and both catalogs; the prompt gains a
+  "Structural variants" section whose worked example runs in the sandbox in CI
+  ([#28](https://github.com/genogrove/canopy/issues/28), [#29](https://github.com/genogrove/canopy/pull/29)).
 - **Structural-variant layer**: `layers/sv.py` attaches a sample's SVs as one
   `breakpoint_edge` each between the backbone nodes its breakends fall in — the containing
   gene, or a 1 Mb `intergenic_region` bin created on demand outside every gene — carrying the
