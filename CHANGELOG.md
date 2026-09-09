@@ -97,6 +97,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#5](https://github.com/genogrove/canopy/pull/5)).
 
 ### Changed
+- **SV answers are one row per SV, both breakpoints spelled out**: the prompt's SV section and
+  worked example emit `bp1`/`bp2` with the gene(s) containing each (or `intergenic`), the span
+  between the breakpoints as the row interval when both are on one chromosome (with `size` as
+  their distance), the gene-side breakpoint otherwise; a 1 Mb anchor bin is never reported; an
+  SV with both ends inside the gene is intragenic, not a join; the anchor line says how many SVs
+  join the gene to another gene and when none do
+  ([#31](https://github.com/genogrove/canopy/pull/31)).
 - **Per-stage progress for a question**: a query used to print nothing between the prompt and the
   answer, so a slow LLM call, a slow rE2G lookup and a slow grove query were indistinguishable. Each
   stage now logs with its own timing, and the enhancer line names what it looked up and in which

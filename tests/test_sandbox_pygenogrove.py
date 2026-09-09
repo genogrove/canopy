@@ -214,8 +214,10 @@ def test_grove_context_grants_resolved_paths_so_a_symlinked_cache_works(tmp_path
 
 def test_system_prompt_sv_example_runs_against_the_attached_grove(tmp_path):
     """The SV worked example, verbatim, through the real sandbox: MYC at its real coordinate,
-    one BRCA-US cohort table with two SVs (one to a gene, one intergenic), attached through
-    preamble.build; the rows must name the partner, the breakpoints, sample and cohort."""
+    one BRCA-US cohort table with four SVs — a DEL into two overlapping genes, an INV to an
+    intergenic position, a TRA with MYC as breakend 2, and an intragenic DEL with both ends in
+    MYC — attached through preamble.build. One row per SV with both breakpoints and their
+    genes; only the first counts as joining MYC to another gene."""
     import json
     import re
     from pathlib import Path
@@ -239,23 +241,31 @@ def test_system_prompt_sv_example_runs_against_the_attached_grove(tmp_path):
                      # INV: far end intergenic -> the 1 Mb bin on chr8
                      "chr8\t127738000\t127738001\tchr8\t130500000\t130500001\tSV2\t4\t+\t+\th2hINV\tm\tA2\tBRCA-US\n"
                      # TRA with MYC as breakend 2: the partner is breakend 1, on chr7
-                     "chr7\t132052174\t132052175\tchr8\t127741149\t127741150\tSV3\t63\t+\t-\tTRA\tm\tA3\tBRCA-US\n")
+                     "chr7\t132052174\t132052175\tchr8\t127741149\t127741150\tSV3\t63\t+\t-\tTRA\tm\tA3\tBRCA-US\n"
+                     # intragenic DEL: both breakends inside MYC -> a self-edge, NOT a join to another gene
+                     "chr8\t127736000\t127736001\tchr8\t127739000\t127739001\tSV4\t9\t+\t-\tDEL\tm\tA4\tBRCA-US\n")
     code = "import json\n" + preamble.build(str(gg), None, {"BRCA-US": str(table)}) + m.group(1)
     result = sandbox.run(code, data_paths=[str(tmp_path)], extra_syspath=[_pygenogrove_site_dir()])
 
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
-    assert lines[0] == "MYC rearrangements in BRCA-US (3 SVs, 3 tumours):"   # 4 edges, 3 SVs
+    assert lines[0] == "MYC rearrangements in BRCA-US (4 SVs in 4 tumours, 1 joining MYC to another gene):"
     rows = [json.loads(ln) for ln in lines[1:]]
-    assert [(r["svclass"], r["name"], r["type"]) for r in rows] == [
-        ("DEL", "PVT1", "gene"), ("DEL", "PVT1-AS", "gene"),
-        ("INV", "intergenic", "intergenic_region"), ("TRA", "intergenic", "intergenic_region")]
-    assert rows[0]["myc_breakpoint"] == "chr8:127740000" and rows[0]["partner_breakpoint"] == "chr8:127897000"
-    assert rows[0]["sample"] == "A1" and rows[0]["cohort"] == "BRCA-US"
-    assert (rows[2]["chrom"], rows[2]["start"], rows[2]["end"]) == ("chr8", 130_000_000, 130_999_999)
-    # the translocation's partner is the chr7 bin, even though MYC is breakend 2 of the record
-    assert (rows[3]["chrom"], rows[3]["start"], rows[3]["end"]) == ("chr7", 132_000_000, 132_999_999)
-    assert rows[3]["partner_breakpoint"] == "chr7:132052174" and rows[3]["myc_breakpoint"] == "chr8:127741149"
+    assert [(r["svclass"], r["bp1_gene"], r["bp2_gene"]) for r in rows] == [
+        ("DEL", "MYC", "PVT1,PVT1-AS"),            # one row per SV; both overlapping genes, sorted
+        ("DEL", "MYC", "MYC"),                     # intragenic: counted as an SV, not as a join
+        ("INV", "MYC", "intergenic"),
+        ("TRA", "intergenic", "MYC")]              # MYC is breakend 2 of this record
+    assert all(r["type"] == "sv" for r in rows)                                  # BED/serve read type+name
+    assert [r["name"] for r in rows] == ["DEL:MYC~PVT1,PVT1-AS", "DEL:MYC~MYC", "INV:MYC~intergenic", "TRA:intergenic~MYC"]
+    # one chromosome: the row is the span between the breakpoints, size = their distance
+    assert (rows[0]["chrom"], rows[0]["start"], rows[0]["end"], rows[0]["size"]) == ("chr8", 127_740_000, 127_897_000, 157_000)
+    assert (rows[1]["start"], rows[1]["end"], rows[1]["size"]) == (127_736_000, 127_739_000, 3_000)
+    assert (rows[2]["start"], rows[2]["end"], rows[2]["size"]) == (127_738_000, 130_500_000, 2_762_000)
+    # across chromosomes: no span — the row is the MYC-side breakpoint, both breakpoints spelled out
+    assert (rows[3]["chrom"], rows[3]["start"], rows[3]["end"], rows[3]["size"]) == ("chr8", 127_741_149, 127_741_149, None)
+    assert rows[3]["bp1"] == "chr7:132052174" and rows[3]["bp2"] == "chr8:127741149"
+    assert rows[0]["sample"] == "A1" and rows[0]["cohort"] == "BRCA-US" and rows[0]["support"] == 12
 
 
 def test_warm_worker_grows_by_sv_cohort_and_sv_cohorts_scopes_each_question(tmp_path):
