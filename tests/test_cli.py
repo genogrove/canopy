@@ -63,6 +63,7 @@ def test_answer_wires_the_declared_layers_for_the_resolved_cohort(monkeypatch, t
     scripts = []
 
     class _R:
+        truncated = False
         returncode, timed_out, stdout, stderr = 0, False, "ok: 1", ""
     args = type("A", (), {"model": "m", "show_code": False, "cohort": None, "format": "tsv"})()
     out, err, *_ = cli._answer("SVs near MYC in BRCA-US?", system_prompt="", base="", gg="/x.gg",

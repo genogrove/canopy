@@ -102,7 +102,7 @@ def test_cohort_default_flag_is_not_display_text(monkeypatch):
     monkeypatch.setattr(serve, "_grove", lambda m: type("G", (), {
         "system_prompt": "", "preamble": "", "gg": "", "model": m,
         "worker": type("W", (), {"submit": lambda s, c: type("R", (), {
-            "returncode": 0, "timed_out": False, "stdout": "ok: 1", "stderr": ""})()})()})())
+            "returncode": 0, "timed_out": False, "truncated": False, "stdout": "ok: 1", "stderr": ""})()})()})())
     monkeypatch.setattr(serve.llm, "generate_query",
                         lambda q, sp, model=None: ("", ["enhancers"], "pass"))
     from genogrove_canopy.layers import enhancers

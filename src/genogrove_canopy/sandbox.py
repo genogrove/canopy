@@ -119,6 +119,17 @@ class SandboxResult:
     truncated: bool = False
 
 
+def result_error(result: SandboxResult) -> str:
+    """Validate execution before either adapter interprets stdout as an answer."""
+    if result.timed_out:
+        return result.stderr.strip() or "The query exceeded its time limit."
+    if result.truncated:
+        return "The query output exceeded its limit; the answer is incomplete. Narrow the query."
+    if result.returncode != 0:
+        return result.stderr.strip() or "(the generated code failed with no output)"
+    return ""
+
+
 # --------------------------------------------------------------------------- #
 # The in-child bootstrap. Prepended to the untrusted code; runs first and
 # installs the import allowlist / read-only open before the code executes.

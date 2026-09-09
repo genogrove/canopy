@@ -121,8 +121,8 @@ def _pipeline(question: str, cohort: str, model: str, emit) -> dict:
 
     emit("step", "Running the query over the grove")
     result = grove.worker.submit("import json\n" + grove.preamble + enh_pre + code)
-    if result.returncode != 0 or result.timed_out:
-        err = result.stderr.strip() or "(the generated code failed with no output)"
+    err = sandbox.result_error(result)
+    if err:
         return {"error": err, "code": code}
     records, passthrough = _parse_output(result.stdout)
     return {"summary": passthrough, "records": records, "code": code, "note": note}
