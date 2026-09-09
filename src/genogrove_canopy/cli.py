@@ -13,6 +13,7 @@ import argparse
 import json
 import sys
 import time
+from functools import lru_cache
 from pathlib import Path
 
 from genogrove_canopy import __version__, llm, log, resources, sandbox
@@ -96,30 +97,72 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _resolve_cohorts(specs):
-    """Map ``--cohort`` specs to ``{cohort name: [accessions]}`` via ``re2g_cohorts``.
+_BRIDGE = Path(__file__).parent / "data" / "cohorts.tsv"
 
-    Each spec matches a cohort by exact ontology id or case-insensitive substring of its
-    name; the most-replicated match wins (the catalog is sorted by replicate count). Raises
+
+@lru_cache(maxsize=1)
+def _bridge() -> list[dict]:
+    """The curated tissue-term rows of ``data/cohorts.tsv`` (see its header)."""
+    import csv
+
+    with _BRIDGE.open() as fh:
+        rows = list(csv.DictReader((ln for ln in fh if not ln.startswith("#")), delimiter="\t"))
+    for r in rows:
+        r["aliases"] = [a for a in r["aliases"].split(";") if a]
+        r["re2g"] = [r["re2g"]] if r["re2g"] else []
+        r["pcawg"] = [c for c in r["pcawg"].split(",") if c]
+    return rows
+
+
+def _resolve_cohorts(specs):
+    """Map cohort specs (``--cohort`` values or the model's ``COHORT:`` terms) to per-layer keys:
+    ``{label: {"re2g": [ontology ids], "pcawg": [project codes]}}``.
+
+    Each spec resolves, in order, as: a layer key as written (an rE2G ontology id, a PCAWG
+    project code); a bridge term or alias (``data/cohorts.tsv`` — one tissue word gives both
+    layers' keys, which is what lets one ``COHORT:`` line drive enhancers *and* SVs); or a
+    case-insensitive substring of an rE2G biosample name (most-replicated match wins). Raises
     ``SystemExit`` with a pointer to ``--list-cohorts`` on no match.
     """
     catalog = resources.re2g_cohorts()
+    pcawg = {r["project_code"] for r in resources.pcawg_cohorts()}
     chosen = {}
     for spec in specs:
         s = spec.strip().lower()
-        match = next((c for c in catalog if c["ontology_id"].lower() == s), None) or \
-            next((c for c in catalog if s in c["name"].lower()), None)
-        if match is None:
+        hit = next((c for c in catalog if c["ontology_id"].lower() == s), None)
+        if hit:
+            chosen[hit["name"]] = {"re2g": [hit["ontology_id"]], "pcawg": []}
+            continue
+        if spec.strip().upper() in pcawg:
+            chosen[spec.strip().upper()] = {"re2g": [], "pcawg": [spec.strip().upper()]}
+            continue
+        row = next((r for r in _bridge() if s == r["term"] or s in (a.lower() for a in r["aliases"])), None)
+        if row:
+            chosen[row["term"]] = {"re2g": row["re2g"], "pcawg": row["pcawg"]}
+            continue
+        hit = next((c for c in catalog if s in c["name"].lower()), None)
+        if hit is None:
             raise SystemExit(f"canopy: no cohort matches {spec!r} — see --list-cohorts")
-        chosen[match["name"]] = match["accessions"]
+        chosen[hit["name"]] = {"re2g": [hit["ontology_id"]], "pcawg": []}
     return chosen
 
 
 def _list_cohorts() -> None:
-    """Print the available rE2G cohorts (most-replicated first) to stdout."""
+    """Print what ``--cohort`` / ``COHORT:`` can name: the tissue terms that drive both layers,
+    then each layer's own keys (rE2G biosamples most-replicated first, PCAWG project codes)."""
+    print("# tissue terms (data/cohorts.tsv) — one word resolves both layers")
+    print(f"{'term':14}  {'rE2G':14}  {'PCAWG':32}  aliases")
+    for r in _bridge():
+        print(f"{r['term']:14}  {(r['re2g'] or ['-'])[0]:14}  {','.join(r['pcawg']) or '-':32}  "
+              f"{'; '.join(r['aliases'])}")
+    print("\n# ENCODE-rE2G biosamples (enhancers)")
     print(f"{'ontology id':16}  {'reps':>4}  {'type':16}  name")
     for c in resources.re2g_cohorts():
         print(f"{c['ontology_id']:16}  {c['n_replicates']:>4}  {c['type']:16}  {c['name']}")
+    print("\n# PCAWG project codes (structural variants)")
+    print(f"{'code':10}  {'samples':>7}  {'SVs':>7}")
+    for r in resources.pcawg_cohorts():
+        print(f"{r['project_code']:10}  {r['n_samples']:>7}  {r['n_svs']:>7}")
 
 
 def _grove_context():
@@ -337,11 +380,8 @@ def _prepare() -> None:
 
 
 def _cohort_ids(cohorts) -> list:
-    """Ontology ids for the selected cohort **names** — the enhancer index is keyed by id."""
-    if not cohorts:
-        return []
-    name2id = {c["name"]: c["ontology_id"] for c in resources.re2g_cohorts()}
-    return [name2id[n] for n in cohorts if n in name2id]
+    """The rE2G ontology ids across the resolved ``cohorts`` (the enhancer index is keyed by id)."""
+    return [i for c in cohorts.values() for i in c["re2g"]]
 
 
 

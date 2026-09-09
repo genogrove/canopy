@@ -27,3 +27,19 @@ def test_declared_cohorts_split_on_semicolon(monkeypatch):
     args = type("A", (), {"cohort": None})()
     cohorts, note = cli._resolve_query_cohorts(args, "K562; HepG2 ;")
     assert seen == [["K562", "HepG2"]] and note is None and list(cohorts) == ["K562", "HepG2"]
+
+
+def test_resolve_cohorts_gives_both_layers_keys():
+    """One spec -> per-layer keys: a tissue term (bridge row: rE2G id + PCAWG codes), an rE2G
+    ontology id or biosample-name substring (rE2G only), a PCAWG project code (SV only)."""
+    from genogrove_canopy import cli
+
+    r = cli._resolve_cohorts(["Breast Cancer", "EFO:0002067", "hepg2", "BRCA-US", "bone"])
+    assert r["breast"] == {"re2g": ["EFO:0001203"], "pcawg": ["BRCA-US", "BRCA-UK", "BRCA-EU"]}
+    assert r["K562"] == {"re2g": ["EFO:0002067"], "pcawg": []}
+    assert r["HepG2"]["re2g"] == ["EFO:0001187"] and r["HepG2"]["pcawg"] == []
+    assert r["BRCA-US"] == {"re2g": [], "pcawg": ["BRCA-US"]}
+    assert r["bone"] == {"re2g": [], "pcawg": ["BOCA-UK", "SARC-US"]}   # rE2G has no bone biosample
+    assert cli._cohort_ids(r) == ["EFO:0001203", "EFO:0002067", "EFO:0001187"]
+    with pytest.raises(SystemExit, match="no cohort matches"):
+        cli._resolve_cohorts(["nonsense-tissue"])

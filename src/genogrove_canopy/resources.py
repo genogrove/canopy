@@ -719,6 +719,24 @@ def re2g_index_file(filename: str) -> Path:
     return _download(url, manifest[filename], dest, label=f"rE2G {filename}")
 
 
+_PCAWG_COHORTS = Path(__file__).parent / "data" / "pcawg_cohorts.tsv"
+
+
+@lru_cache(maxsize=1)
+def pcawg_cohorts() -> list[dict]:
+    """The 47 PCAWG SV cohorts (ICGC project codes) from the packaged catalog, built by
+    ``tools/build_pcawg_cohorts.py`` from the pinned sample sheet + SV tarballs: one dict per
+    code with ``n_samples``, ``n_svs`` (ints) and ``aliquot_ids`` (list)."""
+    import csv
+
+    with _PCAWG_COHORTS.open(newline="") as fh:
+        rows = list(csv.DictReader(fh, delimiter="\t"))
+    for r in rows:
+        r["n_samples"], r["n_svs"] = int(r["n_samples"]), int(r["n_svs"])
+        r["aliquot_ids"] = r["aliquot_ids"].split(",")
+    return rows
+
+
 def re2g_cohorts() -> list[dict]:
     """The catalog grouped into **cohorts** — one per biosample (its ontology id), folding
     the replicate accessions together. This is the request→biosample association layer: an
