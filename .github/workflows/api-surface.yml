@@ -44,8 +44,14 @@ jobs:
       #   tabix      — the `bgzip`/`tabix` executables. Several tests `skipif` without them, so
       #                omitting this would install the bindings and then skip the tests that
       #                need indexed input.
+      #   The runner image ships Google's Chrome apt source, which periodically serves a
+      #   Packages index whose hash does not match its Release file ("Hash Sum mismatch");
+      #   `apt-get update` then exits 100 and this step fails before installing anything.
+      #   Nothing here needs Chrome, so drop that source first.
       - name: Install htslib (build headers + bgzip/tabix binaries)
-        run: sudo apt-get update && sudo apt-get install -y libhts-dev tabix
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*.list
+          sudo apt-get update && sudo apt-get install -y libhts-dev tabix
 
       # pygenogrove is resolved from the pinned git commit and builds a C++ extension, so this
       # needs a toolchain and takes minutes — unlike the skeleton job's seconds.
