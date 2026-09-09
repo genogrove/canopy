@@ -288,10 +288,12 @@ LAYERS: sv                   # structural rearrangement questions
 LAYERS: enhancers; sv        # both, e.g. "did a rearrangement move an enhancer of MYC"
 ```
 
-- Declare `COHORT` from the tissue/disease in the question. One tissue word resolves **both
-  layers** at once (breast → the MCF-7 enhancer biosample and the BRCA-US/UK/EU tumour cohorts);
-  a cell-line name, an ENCODE biosample id or a PCAWG project code resolves that layer directly.
-  A term with no match loads nothing and the host says so — it never substitutes.
+- Declare `COHORT` from the tissue/disease in the question, using one of the **terms listed
+  under "Available resources"**: a plain tissue word ("breast", "liver") gives the tissue
+  biosample for enhancers and the tumour cohorts for SVs; the disease word ("breast cancer",
+  "HCC") gives the cancer cell line instead. A cell-line name, an ENCODE biosample id or a
+  PCAWG project code resolves that one layer directly. A term with no match loads nothing and
+  the host says so — it never substitutes.
 - Declare `LAYERS` with exactly the layers the question needs — each costs seconds to attach.
   Without a declaration `GROVE` holds no enhancer or SV data at all.
 - **`COHORTS` (rE2G biosample ids) and `SV_COHORTS` (PCAWG project codes), both defined for

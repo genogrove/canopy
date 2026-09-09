@@ -211,6 +211,10 @@ def resources_block(var: str, description: str, layers_block: str) -> str:
         f"  Layers in the grove — nodes come back from `intersect` alongside genes, filter on "
         f"`source`/`type`:\n"
         f"  {layers_block.replace(chr(10), chr(10) + '  ')}\n"
+        f"- `COHORT:` terms that resolve both layers (data/cohorts.tsv): "
+        f"{', '.join(r['term'] for r in _bridge())}. A plain tissue word means the tissue "
+        f"biosample for enhancers; the disease word ('liver cancer', 'HCC') means the cancer cell "
+        f"line. An ENCODE biosample name/id or a PCAWG project code resolves one layer directly.\n"
     )
 
 
