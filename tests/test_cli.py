@@ -133,3 +133,18 @@ def test_every_catalogue_name_resolves_to_its_own_biosample():
     for cohort in resources.re2g_cohorts():
         result = cli._resolve_cohorts([" " + cohort["name"].swapcase() + " "])
         assert cli._cohort_ids(result) == [cohort["ontology_id"]], cohort["name"]
+
+
+def test_bridge_words_that_are_biosample_names_name_that_biosample_and_keep_svs():
+    """Exact biosample names win over the bridge. So a bridge term or alias that is ALSO an rE2G
+    biosample name must point at that very biosample — otherwise the word resolves to the
+    biosample, the bridge row is bypassed, and its PCAWG cohorts are silently lost (this was
+    `lung`, `pancreas` and `RCC`)."""
+    from genogrove_canopy import cli, resources
+
+    names = {c["name"].strip().lower(): c["ontology_id"] for c in resources.re2g_cohorts()}
+    for r in cli._bridge():
+        for w in [r["term"], *r["aliases"]]:
+            if w.lower() in names:
+                assert r["re2g"] == [names[w.lower()]], f"{w!r}: bridge row names another biosample"
+                assert cli._pcawg_codes(cli._resolve_cohorts([w])) == r["pcawg"], w

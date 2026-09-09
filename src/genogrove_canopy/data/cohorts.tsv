@@ -12,11 +12,11 @@ prostate		UBERON:0002367	PRAD-CA,PRAD-UK,PRAD-US,EOPC-DE	prostate gland (tissue)
 prostate cancer	prostate carcinoma;prostate tumour;prostate tumor	EFO:0005726	PRAD-CA,PRAD-UK,PRAD-US,EOPC-DE	LNCaP (androgen-sensitive line); EOPC = early-onset
 liver	hepatic	UBERON:0002107	LIRI-JP,LIHC-US,LICA-FR,LINC-JP	liver (tissue)
 liver cancer	hepatocellular;HCC;hepatocellular carcinoma	EFO:0001187	LIRI-JP,LIHC-US,LICA-FR,LINC-JP	HepG2 (hepatoblastoma-derived line)
-lung	pulmonary	UBERON:0008952	LUAD-US,LUSC-US	upper lobe of left lung (tissue)
+lung	pulmonary	UBERON:0002048	LUAD-US,LUSC-US	lung (tissue)
 lung cancer	NSCLC;lung adenocarcinoma;lung carcinoma	EFO:0001086	LUAD-US,LUSC-US	A549 (adenocarcinoma line) also stands in for squamous LUSC
 colon	colorectal;bowel;rectal	UBERON:0001157	COAD-US,READ-US	transverse colon (tissue)
 colon cancer	colorectal cancer;colorectal carcinoma;CRC	EFO:0002824	COAD-US,READ-US	HCT116 (colon carcinoma line)
-pancreas		UBERON:0001150	PACA-AU,PACA-CA,PAEN-AU,PAEN-IT	body of pancreas (tissue); PAEN = neuroendocrine, a different tumour
+pancreas		UBERON:0001264	PACA-AU,PACA-CA,PAEN-AU,PAEN-IT	pancreas (tissue); PAEN = neuroendocrine, a different tumour
 pancreatic cancer	pancreatic carcinoma;PDAC	EFO:0002713	PACA-AU,PACA-CA,PAEN-AU,PAEN-IT	Panc1 (ductal line, 1 replicate)
 leukemia	CML;AML;myeloid;blood cancer;leukaemia	EFO:0002067	LAML-KR,CMDI-UK	K562 is CML; LAML is AML and CMDI myelodysplasia — same lineage, different disease
 lymphoma	B-cell lymphoma;CLL;lymphoid;DLBCL	EFO:0005719	MALY-DE,DLBC-US,CLLE-ES	Karpas-422 (B-cell lymphoma line, 1 replicate)
@@ -26,7 +26,8 @@ ovary	ovarian;ovarian cancer	UBERON:0000992	OV-AU,OV-US	ovary (tissue); rE2G has
 stomach	gastric;gastric cancer	UBERON:0000945	GACA-CN,STAD-US	stomach (tissue); no gastric cancer line in rE2G
 esophagus	esophageal;oesophageal;oesophagus	UBERON:0006920	ESAD-UK	esophagus squamous epithelium (tissue) vs an adenocarcinoma cohort
 brain	glioma;glioblastoma;CNS;medulloblastoma	UBERON:0000955	GBM-US,LGG-US,PBCA-DE	brain (tissue); PBCA = paediatric brain tumours
-kidney	renal;renal cancer;RCC	UBERON:0002113	KICH-US,KIRC-US,KIRP-US,RECA-EU	kidney (tissue)
+kidney	renal	UBERON:0002113	KICH-US,KIRC-US,KIRP-US,RECA-EU	kidney (tissue)
+kidney cancer	renal cancer;RCC;renal cell carcinoma	EFO:0000681	KICH-US,KIRC-US,KIRP-US,RECA-EU	RCC line (1 replicate)
 bladder	urothelial;bladder cancer	UBERON:0001255	BLCA-US	urinary bladder (tissue)
 uterus	endometrial;endometrium;uterine	UBERON:0000995	UCEC-US	uterus (tissue)
 thyroid	thyroid cancer	UBERON:0002046	THCA-US	thyroid gland (tissue)
