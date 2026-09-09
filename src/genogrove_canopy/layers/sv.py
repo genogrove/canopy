@@ -49,7 +49,7 @@ from genogrove_canopy.layers._base import Layer
 _FIELDS = ("chrom1", "start1", "end1", "chrom2", "start2", "end2",
            "sv_id", "pe_support", "strand1", "strand2", "svclass", "svmethod")
 
-_BIN = 1_000_000  # grid size for the intergenic anchor — see module docstring
+_BIN = 1_000_000  # grid size for the intergenic anchor — see module docstring; attach_tracked repeats it
 
 
 def parse_bedpe(path) -> list[dict]:
@@ -133,10 +133,14 @@ def attach(grove, records) -> int:
     return attach_tracked(grove, records)[0]
 
 
-def attach_tracked(grove, records):
+def attach_tracked(grove, records, bin_size=1_000_000):  # literal: the def runs in the sandbox
     """Same as ``attach``, but also returns every edge and bin it created — as
     ``("edge", a, b)`` and ``("key", index, Key)`` entries — so ``detach`` can remove
     exactly what this call added and nothing shared with a later sample.
+
+    **Shipped into the sandbox as source text** (see ``preamble.build``): self-contained by
+    construction — ``pygenogrove`` imported inside, the bin size a default argument rather
+    than the module global, no helpers from this module.
     """
     import pygenogrove as pg
 
@@ -148,14 +152,14 @@ def attach_tracked(grove, records):
         genes = [k for k in grove.intersect(at, chrom) if k.data.get("type") == "gene"]
         if genes:
             return genes
-        bin_start = (pos // _BIN) * _BIN
+        bin_start = (pos // bin_size) * bin_size
         key = bins.get((chrom, bin_start))
         if key is None:  # one already there (an earlier sample's, or from another bin lookup)?
             key = next((k for k in grove.intersect(at, chrom)
                         if k.data.get("type") == "intergenic_region"
                         and k.value.start == bin_start), None)
         if key is None:
-            key = grove.insert(chrom, pg.GenomicCoordinate(".", bin_start, bin_start + _BIN - 1),
+            key = grove.insert(chrom, pg.GenomicCoordinate(".", bin_start, bin_start + bin_size - 1),
                                {"type": "intergenic_region"})
             created.append(("key", chrom, key))
         bins[(chrom, bin_start)] = key

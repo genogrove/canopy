@@ -9,7 +9,7 @@ import pytest
 
 pg = pytest.importorskip("pygenogrove")
 
-from genogrove_canopy import sandbox
+from genogrove_canopy import preamble, sandbox
 from genogrove_canopy.cli import _pygenogrove_site_dir
 from genogrove_canopy.gff import load_gff
 
@@ -71,7 +71,7 @@ def test_enhancer_preamble_attaches_links_inside_the_sandbox(tmp_path, monkeypat
     monkeypatch.setattr(resources, "ensure_all_grove", lambda name: gg)
 
     _, _, data_paths = _grove_context()
-    code = enhancers.preamble(str(gg), {"COH": str(links)}) + (
+    code = preamble.build(str(gg), {"COH": str(links)}) + (
         "enh = [k for k in GROVE.intersect(pg.GenomicCoordinate('*', 150, 150), 'chr1')]\n"
         "print('enh', len(enh), enh[0].data['source'])\n"
     )
@@ -93,7 +93,7 @@ def test_warm_worker_reuses_the_attached_grove_and_a_query_cannot_mutate_it(tmp_
     g.serialize(str(gg))
     links = tmp_path / "c.links.tsv"
     links.write_text("chr1\t100\t200\tintergenic\tENSG1\tchr1\t1000\t1\t0.5\t0.9\n")
-    pre = "import json\n" + enhancers.preamble(str(gg), {"C": str(links)})
+    pre = "import json\n" + preamble.build(str(gg), {"C": str(links)})
     count = ("enh = [k for k in GROVE.intersect(pg.GenomicCoordinate('*', 0, 5000), 'chr1')"
              " if k.data.get('type') == 'enhancer']\nprint('enh', len(enh))\n")
 
@@ -102,7 +102,7 @@ def test_warm_worker_reuses_the_attached_grove_and_a_query_cannot_mutate_it(tmp_
     links2 = tmp_path / "d.links.tsv"       # a second cohort: the same element plus a new one
     links2.write_text("chr1\t100\t200\tintergenic\tENSG1\tchr1\t1000\t2\t0.4\t0.7\n"
                       "chr1\t300\t400\tintergenic\tENSG1\tchr1\t1000\t1\t0.1\t0.2\n")
-    pre2 = "import json\n" + enhancers.preamble(str(gg), {"D": str(links2)})
+    pre2 = "import json\n" + preamble.build(str(gg), {"D": str(links2)})
     both = ("gene = next(iter(GROVE.intersect(pg.GenomicCoordinate('*', 1500, 1500), 'chr1')))\n"
             "print('cohorts', sorted(set(c for m in GROVE.get_edges(gene)"
             " if m and m.get('rel') == 'regulated_by' for c in m['byCohort'])), COHORTS)\n")
@@ -112,7 +112,7 @@ def test_warm_worker_reuses_the_attached_grove_and_a_query_cannot_mutate_it(tmp_
                          + "try:\n    GROVE.insert('chr1', pg.GenomicCoordinate('.', 5, 6), {})\n"
                          "except AttributeError as e:\n    print('refused', e)\n")
         # A plain (no-cohort) question in between must not be able to reach the memo either.
-        plain = w.submit("import json\n" + enhancers.preamble(str(gg))
+        plain = w.submit("import json\n" + preamble.build(str(gg))
                          + "print('hidden', '_CANOPY_STATE' not in globals())\n")
         second = w.submit(pre + count + ident)
         third = w.submit(pre2 + count + ident + both)
@@ -163,7 +163,7 @@ def test_system_prompt_worked_example_runs_against_the_attached_grove(tmp_path):
     links = tmp_path / "mcf7.links.tsv"
     links.write_text("chr7\t55018383\t55019773\tpromoter\tENSG00000146648\tchr7\t55018820\t1\t0.9\t0.99999\n")
 
-    code = "import json\n" + enhancers.preamble(str(gg), {"EFO:0001203": str(links)}) + example
+    code = "import json\n" + preamble.build(str(gg), {"EFO:0001203": str(links)}) + example
     result = sandbox.run(code, data_paths=[str(tmp_path)], extra_syspath=[_pygenogrove_site_dir()])
 
     assert result.returncode == 0, result.stderr
@@ -204,7 +204,7 @@ def test_grove_context_grants_resolved_paths_so_a_symlinked_cache_works(tmp_path
     links = enhancers.links_file("C")
     assert "link/" not in base_pre and all("link/" not in p for p in data_paths) and "link/" not in str(links)
 
-    code = (base_pre + enhancers.preamble(data_paths[0], {"C": str(links)})
+    code = (base_pre + preamble.build(data_paths[0], {"C": str(links)})
             + "print('enh', sum(1 for k in GROVE.intersect(pg.GenomicCoordinate('*', 150, 150), 'chr1')"
               " if k.data.get('type') == 'enhancer'))\n")
     result = sandbox.run(code, data_paths=data_paths, extra_syspath=[_pygenogrove_site_dir()])

@@ -22,7 +22,7 @@ import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from genogrove_canopy import llm, resources, sandbox
+from genogrove_canopy import llm, preamble, resources, sandbox
 from genogrove_canopy.cli import (
     DEFAULT_COHORT,
     DEFAULT_MODEL,
@@ -110,7 +110,7 @@ def _pipeline(question: str, cohort: str, model: str, emit) -> dict:
             cohort_links = {cid: str(enhancers.links_file(cid))
                             for cid in cohort_ids if enhancers.ensure_index(cid)}
             if cohort_links:
-                enh_pre = enhancers.preamble(grove.gg, cohort_links)
+                enh_pre = preamble.build(grove.gg, cohort_links)
                 note = f"enhancers attached from {'; '.join(cohorts)}" + (
                     " (default)" if why == "default" else "")
 

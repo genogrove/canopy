@@ -16,7 +16,7 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
-from genogrove_canopy import __version__, llm, log, resources, sandbox
+from genogrove_canopy import __version__, llm, log, preamble, resources, sandbox
 
 # Default Anthropic model for code generation. Opus is the most capable tier and
 # the connected-interval reasoning here is the paper's headline contribution, so
@@ -173,7 +173,7 @@ def _grove_context():
     ``resources.ensure_all_grove``). The preamble binds ``GROVE`` to an open ``GroveView`` of it,
     so one `intersect` returns genes *and* cCREs. The enhancer layer is **not** in the artifact
     (it is cohort-specific): when the model declares ``COHORT``/``TARGETS``, ``_answer`` appends
-    ``enhancers.preamble(gg, cohort_links)``, which rebinds ``GROVE`` to a mutable copy with that
+    ``preamble.build(gg, cohort_links)``, which rebinds ``GROVE`` to a mutable copy with that
     cohort's nodes and edges attached — same name, so generated code never opens a path itself.
     """
     from genogrove_canopy import layers
@@ -188,7 +188,7 @@ def _grove_context():
     )
     # The sandbox reads only these roots. `LINKS_DIR` is where `enhancers.preamble`'s
     # `attach_links` opens a cohort's links table, so it must be granted alongside the grove.
-    return block, enhancers.preamble(gg), [gg, str(enhancers.LINKS_DIR.resolve())]
+    return block, preamble.build(gg), [gg, str(enhancers.LINKS_DIR.resolve())]
 
 
 def resources_block(var: str, description: str, layers_block: str) -> str:
@@ -402,7 +402,7 @@ def _describe_targets(targets) -> str:
     return " and ".join(parts) or "the declared targets"
 
 
-def _answer(question, *, system_prompt, preamble, gg, args, execute):
+def _answer(question, *, system_prompt, base, gg, args, execute):
     """Translate one question to code, run it via ``execute(script)``, and render.
 
     ``execute`` is a ``script -> SandboxResult`` callable (``sandbox.run`` for one-shot,
@@ -438,7 +438,7 @@ def _answer(question, *, system_prompt, preamble, gg, args, execute):
                             for cid in cohort_ids if enhancers.ensure_index(cid)}
             enh_s = time.perf_counter() - t_enh
         if cohort_links:
-            enh_pre = enhancers.preamble(gg, cohort_links)
+            enh_pre = preamble.build(gg, cohort_links)
             src = " (default — name a tissue or pass --cohort)" if note == "default" else ""
             log.took(f"rE2G: attached {'; '.join(cohorts)}{src}", enh_s)
         elif note and note != "default":
@@ -449,7 +449,7 @@ def _answer(question, *, system_prompt, preamble, gg, args, execute):
     # generated code forgets the import (it's already in the allowlist).
     log.say("Running the query over the grove")
     t1 = time.perf_counter()
-    result = execute("import json\n" + preamble + enh_pre + code)
+    result = execute("import json\n" + base + enh_pre + code)
     exec_s = time.perf_counter() - t1
     if result.returncode != 0 or result.timed_out:
         return "", (result.stderr.strip() or "(the generated code failed with no output)"), gen_s, enh_s, exec_s
@@ -477,7 +477,7 @@ def _interactive(args, *, system_prompt, preamble, data_paths, site_dir) -> int:
                 break
             try:
                 out, err, gen_s, enh_s, exec_s = _answer(question, system_prompt=system_prompt,
-                                                  preamble=preamble, gg=data_paths[0], args=args,
+                                                  base=preamble, gg=data_paths[0], args=args,
                                                   execute=worker.submit)
             except Exception as exc:  # e.g. an LLM error — keep the session alive
                 print(f"canopy: {exc}", file=sys.stderr)
@@ -543,7 +543,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:  # one-shot: a fresh sandbox per invocation
         out, err, _gen_s, _enh_s, _exec_s = _answer(
-            args.question, system_prompt=system_prompt, preamble=preamble, gg=data_paths[0],
+            args.question, system_prompt=system_prompt, base=preamble, gg=data_paths[0],
             args=args,
             execute=lambda s: sandbox.run(s, data_paths=data_paths, extra_syspath=[site_dir]),
         )
