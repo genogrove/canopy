@@ -229,20 +229,30 @@ def test_system_prompt_sv_example_runs_against_the_attached_grove(tmp_path):
     g = pg.Grove(order=100)
     g.insert("chr8", pg.GenomicCoordinate("+", 127_735_433, 127_742_951), {"type": "gene", "id": "ENSG00000136997.20", "name": "MYC"})
     g.insert("chr8", pg.GenomicCoordinate("-", 127_890_000, 127_900_000), {"type": "gene", "id": "ENSG1", "name": "PVT1"})
+    g.insert("chr8", pg.GenomicCoordinate("+", 127_895_000, 127_905_000), {"type": "gene", "id": "ENSG2", "name": "PVT1-AS"})  # overlaps PVT1
     gg = tmp_path / "myc.gg"
     g.serialize(str(gg))
     table = tmp_path / "BRCA-US.tsv"
     table.write_text("\t".join(sv._FIELDS + ("sample", "cohort")) + "\n"
-                     "chr8\t127740000\t127740001\tchr8\t127895000\t127895001\tSV1\t12\t+\t-\tDEL\tm\tA1\tBRCA-US\n"
-                     "chr8\t127738000\t127738001\tchr8\t130500000\t130500001\tSV2\t4\t+\t+\th2hINV\tm\tA2\tBRCA-US\n")
+                     # DEL: far end inside PVT1 AND PVT1-AS -> two partner edges, ONE SV
+                     "chr8\t127740000\t127740001\tchr8\t127897000\t127897001\tSV1\t12\t+\t-\tDEL\tm\tA1\tBRCA-US\n"
+                     # INV: far end intergenic -> the 1 Mb bin on chr8
+                     "chr8\t127738000\t127738001\tchr8\t130500000\t130500001\tSV2\t4\t+\t+\th2hINV\tm\tA2\tBRCA-US\n"
+                     # TRA with MYC as breakend 2: the partner is breakend 1, on chr7
+                     "chr7\t132052174\t132052175\tchr8\t127741149\t127741150\tSV3\t63\t+\t-\tTRA\tm\tA3\tBRCA-US\n")
     code = "import json\n" + preamble.build(str(gg), None, {"BRCA-US": str(table)}) + m.group(1)
     result = sandbox.run(code, data_paths=[str(tmp_path)], extra_syspath=[_pygenogrove_site_dir()])
 
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
-    assert lines[0] == "MYC rearrangements in BRCA-US (2 SVs, 2 tumours):"
+    assert lines[0] == "MYC rearrangements in BRCA-US (3 SVs, 3 tumours):"   # 4 edges, 3 SVs
     rows = [json.loads(ln) for ln in lines[1:]]
     assert [(r["svclass"], r["name"], r["type"]) for r in rows] == [
-        ("DEL", "PVT1", "gene"), ("INV", "intergenic", "intergenic_region")]
-    assert rows[0]["breakpoint1"] == "chr8:127740000" and rows[0]["sample"] == "A1" and rows[0]["cohort"] == "BRCA-US"
-    assert (rows[1]["start"], rows[1]["end"]) == (130_000_000, 130_999_999)      # the 1 Mb bin
+        ("DEL", "PVT1", "gene"), ("DEL", "PVT1-AS", "gene"),
+        ("INV", "intergenic", "intergenic_region"), ("TRA", "intergenic", "intergenic_region")]
+    assert rows[0]["myc_breakpoint"] == "chr8:127740000" and rows[0]["partner_breakpoint"] == "chr8:127897000"
+    assert rows[0]["sample"] == "A1" and rows[0]["cohort"] == "BRCA-US"
+    assert (rows[2]["chrom"], rows[2]["start"], rows[2]["end"]) == ("chr8", 130_000_000, 130_999_999)
+    # the translocation's partner is the chr7 bin, even though MYC is breakend 2 of the record
+    assert (rows[3]["chrom"], rows[3]["start"], rows[3]["end"]) == ("chr7", 132_000_000, 132_999_999)
+    assert rows[3]["partner_breakpoint"] == "chr7:132052174" and rows[3]["myc_breakpoint"] == "chr8:127741149"

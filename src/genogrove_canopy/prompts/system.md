@@ -428,12 +428,22 @@ its rearrangements are one hop:
 def svs_of(gene):                        # (partner node, edge) for this question's cohorts
     return [(t, m) for t, m in g.get_edge_list(gene)
             if m and m["rel"] == "breakpoint_edge" and m["cohort"] in SV_COHORTS]
+
+def partner_side(gene, gene_chrom, m):   # the breakend that is NOT in `gene`: (chrom, pos)
+    inside = lambda c, p: c == gene_chrom and gene.value.start <= p <= gene.value.end
+    if inside(m["chrom2"], m["pos2"]) and not inside(m["chrom1"], m["pos1"]):
+        return m["chrom1"], m["pos1"]    # the gene holds breakend 2 -> the partner is breakend 1
+    return m["chrom2"], m["pos2"]
 ```
 
 - The partner node is a **gene** (`type == "gene"`, read its `name`) or a **bin**
-  (`type == "intergenic_region"`; report it by its coordinates — it has no name).
-- Every edge carries `sample` (the tumour it was called in) and `cohort`: count **samples**,
-  not edges, when the question is "how often"; a cohort is many tumours.
+  (`type == "intergenic_region"`; report it by its coordinates — it has no name). A `Key`
+  carries **no chromosome**: the same edge payload sits on both directions, so take the
+  partner's chromosome from the breakend that is *not* inside your gene (`partner_side`),
+  never from `chrom2` blindly — a translocation into the gene has the partner on `chrom1`.
+- Every edge carries `sample` (the tumour it was called in), `sv_id` and `cohort`. **Count
+  distinct `(sample, sv_id)`**, not edges: one SV becomes one edge per gene its other breakend
+  overlaps (an EGFR / EGFR-AS1 breakend gives two), and "how often" means tumours, not edges.
 - `svclass` is the caller's class (`DEL`/`DUP`/`INV`/`TRA`/`INS`); `junction_class` is the
   geometry at the current coordinates and is **not** evidence of copy-number change. Never
   diagnose chromothripsis/chromoplexy from edge counts or cycles — shared gene/bin anchors join
@@ -457,15 +467,23 @@ myc = next(k for k in g.intersect(pg.GenomicCoordinate("*", 127_735_433, 127_735
 def svs_of(gene):
     return [(t, m) for t, m in g.get_edge_list(gene)
             if m and m["rel"] == "breakpoint_edge" and m["cohort"] in SV_COHORTS]
+def partner_side(gene, gene_chrom, m):   # the breakend that is NOT in `gene`: (chrom, pos)
+    inside = lambda c, p: c == gene_chrom and gene.value.start <= p <= gene.value.end
+    if inside(m["chrom2"], m["pos2"]) and not inside(m["chrom1"], m["pos1"]):
+        return m["chrom1"], m["pos1"]
+    return m["chrom2"], m["pos2"]
 hits = svs_of(myc)
-print(f"MYC rearrangements in {', '.join(SV_COHORTS)} ({len(hits)} SVs, "
+n_sv = len({(m["sample"], m["sv_id"]) for _, m in hits})     # distinct SVs, not partner edges
+print(f"MYC rearrangements in {', '.join(SV_COHORTS)} ({n_sv} SVs, "
       f"{len({m['sample'] for _, m in hits})} tumours):")
 for t, m in sorted(hits, key=lambda tm: (tm[1]["svclass"], tm[1]["sample"])):
+    chrom, pos = partner_side(myc, "chr8", m)
+    myc_bp = (m["chrom1"], m["pos1"]) if (chrom, pos) == (m["chrom2"], m["pos2"]) else (m["chrom2"], m["pos2"])
     partner = t.data.get("name") if t.data.get("type") == "gene" else "intergenic"
-    print(json.dumps({"chrom": m["chrom2"], "start": t.value.start, "end": t.value.end,
+    print(json.dumps({"chrom": chrom, "start": t.value.start, "end": t.value.end,
                       "type": t.data["type"], "name": partner, "svclass": m["svclass"],
-                      "junction": m["junction_class"], "breakpoint1": f'{m["chrom1"]}:{m["pos1"]}',
-                      "breakpoint2": f'{m["chrom2"]}:{m["pos2"]}', "sample": m["sample"],
+                      "junction": m["junction_class"], "partner_breakpoint": f"{chrom}:{pos}",
+                      "myc_breakpoint": f"{myc_bp[0]}:{myc_bp[1]}", "sample": m["sample"],
                       "cohort": m["cohort"], "support": m["pe_support"]}))
 ```
 
