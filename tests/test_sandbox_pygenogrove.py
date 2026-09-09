@@ -245,16 +245,18 @@ def test_system_prompt_sv_example_runs_against_the_attached_grove(tmp_path):
 
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
-    assert lines[0] == "MYC rearrangements in BRCA-US (3 SVs, 3 tumours):"   # 4 edges, 3 SVs
+    assert lines[0] == "MYC rearrangements in BRCA-US (3 SVs, 3 tumours, 2 joined to a gene):"  # 4 edges, 3 SVs
     rows = [json.loads(ln) for ln in lines[1:]]
     assert [(r["svclass"], r["name"], r["type"]) for r in rows] == [
         ("DEL", "PVT1", "gene"), ("DEL", "PVT1-AS", "gene"),
-        ("INV", "intergenic", "intergenic_region"), ("TRA", "intergenic", "intergenic_region")]
+        ("INV", "intergenic", "breakpoint"), ("TRA", "intergenic", "breakpoint")]
+    assert (rows[0]["start"], rows[0]["end"]) == (127_890_000, 127_900_000)          # a gene partner: the gene
     assert rows[0]["myc_breakpoint"] == "chr8:127740000" and rows[0]["partner_breakpoint"] == "chr8:127897000"
     assert rows[0]["sample"] == "A1" and rows[0]["cohort"] == "BRCA-US"
-    assert (rows[2]["chrom"], rows[2]["start"], rows[2]["end"]) == ("chr8", 130_000_000, 130_999_999)
-    # the translocation's partner is the chr7 bin, even though MYC is breakend 2 of the record
-    assert (rows[3]["chrom"], rows[3]["start"], rows[3]["end"]) == ("chr7", 132_000_000, 132_999_999)
+    # an intergenic partner: the breakpoint itself, never the 1 Mb bin it anchors to
+    assert (rows[2]["chrom"], rows[2]["start"], rows[2]["end"]) == ("chr8", 130_500_000, 130_500_000)
+    # the translocation's partner is on chr7, even though MYC is breakend 2 of the record
+    assert (rows[3]["chrom"], rows[3]["start"], rows[3]["end"]) == ("chr7", 132_052_174, 132_052_174)
     assert rows[3]["partner_breakpoint"] == "chr7:132052174" and rows[3]["myc_breakpoint"] == "chr8:127741149"
 
 

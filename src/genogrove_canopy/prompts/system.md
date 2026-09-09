@@ -438,8 +438,12 @@ def partner_side(gene, gene_chrom, m):   # the breakend that is NOT in `gene`: (
     return m["chrom2"], m["pos2"]
 ```
 
-- The partner node is a **gene** (`type == "gene"`, read its `name`) or a **bin**
-  (`type == "intergenic_region"`; report it by its coordinates — it has no name). A `Key`
+- The partner node is a **gene** (`type == "gene"`, read its `name`, report the gene's
+  interval) or a **bin** (`type == "intergenic_region"`). A bin is only the anchor that lets
+  an SV outside every gene attach; its 1 Mb coordinates mean nothing biologically, so **never
+  report the bin as an interval** — for an intergenic partner emit the breakpoint position
+  itself (`start == end == pos`) with `name: "intergenic"`. If no partner is a gene, say so
+  in the anchor line rather than listing bins as if they were genes. A `Key`
   carries **no chromosome**: the same edge payload sits on both directions, so take the
   partner's chromosome from the breakend that is *not* inside your gene (`partner_side`),
   never from `chrom2` blindly — a translocation into the gene has the partner on `chrom1`.
@@ -476,14 +480,20 @@ def partner_side(gene, gene_chrom, m):   # the breakend that is NOT in `gene`: (
     return m["chrom2"], m["pos2"]
 hits = svs_of(myc)
 n_sv = len({(m["sample"], m["sv_id"]) for _, m in hits})     # distinct SVs, not partner edges
+n_gene = sum(1 for t, _ in hits if t.data.get("type") == "gene")
 print(f"MYC rearrangements in {', '.join(SV_COHORTS)} ({n_sv} SVs, "
-      f"{len({m['sample'] for _, m in hits})} tumours):")
+      f"{len({m['sample'] for _, m in hits})} tumours, "
+      f"{n_gene} joined to a gene{'' if n_gene else ' — the other breakends are intergenic'}):")
 for t, m in sorted(hits, key=lambda tm: (tm[1]["svclass"], tm[1]["sample"])):
     chrom, pos = partner_side(myc, "chr8", m)
     myc_bp = (m["chrom1"], m["pos1"]) if (chrom, pos) == (m["chrom2"], m["pos2"]) else (m["chrom2"], m["pos2"])
-    partner = t.data.get("name") if t.data.get("type") == "gene" else "intergenic"
-    print(json.dumps({"chrom": chrom, "start": t.value.start, "end": t.value.end,
-                      "type": t.data["type"], "name": partner, "svclass": m["svclass"],
+    is_gene = t.data.get("type") == "gene"
+    # a gene partner is reported as the gene; an intergenic one as the breakpoint itself —
+    # the bin it anchors to is bookkeeping, not a feature
+    start, end = (t.value.start, t.value.end) if is_gene else (pos, pos)
+    print(json.dumps({"chrom": chrom, "start": start, "end": end,
+                      "type": "gene" if is_gene else "breakpoint",
+                      "name": t.data["name"] if is_gene else "intergenic", "svclass": m["svclass"],
                       "junction": m["junction_class"], "partner_breakpoint": f"{chrom}:{pos}",
                       "myc_breakpoint": f"{myc_bp[0]}:{myc_bp[1]}", "sample": m["sample"],
                       "cohort": m["cohort"], "support": m["pe_support"]}))
