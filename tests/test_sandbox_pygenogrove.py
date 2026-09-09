@@ -256,3 +256,32 @@ def test_system_prompt_sv_example_runs_against_the_attached_grove(tmp_path):
     # the translocation's partner is the chr7 bin, even though MYC is breakend 2 of the record
     assert (rows[3]["chrom"], rows[3]["start"], rows[3]["end"]) == ("chr7", 132_000_000, 132_999_999)
     assert rows[3]["partner_breakpoint"] == "chr7:132052174" and rows[3]["myc_breakpoint"] == "chr8:127741149"
+
+
+def test_warm_worker_grows_by_sv_cohort_and_sv_cohorts_scopes_each_question(tmp_path):
+    """Two SV questions in one Worker, different cohorts: the second attaches onto the same grove
+    (no rebuild), the gene then carries both cohorts' edges, and SV_COHORTS names only the cohort
+    of the current question — which is what the prompt's filter relies on."""
+    from genogrove_canopy.layers import sv
+
+    gg = tmp_path / "mini.gg"
+    g = pg.Grove(order=100)
+    g.insert("chr1", pg.GenomicCoordinate("+", 1000, 2000), {"type": "gene", "id": "A", "name": "A"})
+    g.serialize(str(gg))
+    header = "\t".join(sv._FIELDS + ("sample", "cohort")) + "\n"
+    (tmp_path / "X.tsv").write_text(header + "chr1\t1500\t1501\tchr1\t9000000\t9000001\tSV1\t5\t+\t-\tDEL\tm\tS1\tX-US\n")
+    (tmp_path / "Y.tsv").write_text(header + "chr1\t1600\t1601\tchr1\t9500000\t9500001\tSV2\t5\t+\t-\tDEL\tm\tS2\tY-US\n")
+    probe = ("gene = next(iter(GROVE.intersect(pg.GenomicCoordinate('*', 1500, 1500), 'chr1')))\n"
+             "edges = [m for m in GROVE.get_edges(gene) if m and m.get('rel') == 'breakpoint_edge']\n"
+             "print('all', sorted(m['cohort'] for m in edges), 'mine', sorted(m['cohort'] for m in edges if m['cohort'] in SV_COHORTS))\n")
+
+    w = sandbox.Worker(data_paths=[str(tmp_path)], extra_syspath=[_pygenogrove_site_dir()])
+    try:
+        first = w.submit("import json\n" + preamble.build(str(gg), None, {"X-US": str(tmp_path / "X.tsv")}) + probe)
+        second = w.submit("import json\n" + preamble.build(str(gg), None, {"Y-US": str(tmp_path / "Y.tsv")}) + probe)
+    finally:
+        w.close()
+    assert first.returncode == 0, first.stderr
+    assert "all ['X-US'] mine ['X-US']" in first.stdout
+    assert second.returncode == 0, second.stderr
+    assert "all ['X-US', 'Y-US'] mine ['Y-US']" in second.stdout   # grew, and scoped to Y
