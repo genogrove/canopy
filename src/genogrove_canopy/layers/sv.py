@@ -38,7 +38,9 @@ across samples without ever holding two samples' rearrangements at once.
 from __future__ import annotations
 
 import gzip
+from pathlib import Path
 
+from genogrove_canopy import resources
 from genogrove_canopy.layers._base import Layer
 
 # One record per SV (BEDPE-style; any source producing this column shape works).
@@ -51,20 +53,73 @@ _BIN = 1_000_000  # grid size for the intergenic anchor — see module docstring
 
 
 def parse_bedpe(path) -> list[dict]:
-    """One sample's SV records from a BEDPE(-like) file (gzipped or plain, tab-
-    separated, header row present) — matches the PCAWG consensus SV format."""
+    """SV records from a BEDPE(-like) file (gzipped or plain, tab-separated, header row
+    naming the columns) — the PCAWG consensus SV format, or the cohort table `cohort_file`
+    writes (the same columns plus ``sample`` and ``cohort``)."""
     opener = gzip.open if str(path).endswith(".gz") else open
     with opener(path, "rt") as fh:
-        fh.readline()  # header
-        return [dict(zip(_FIELDS, ln.rstrip("\n").split("\t"))) for ln in fh if ln.strip()]
+        return read_table(fh)
+
+
+def read_table(fh) -> list[dict]:
+    """Rows of an open tab-separated file whose first line names the columns.
+
+    **Shipped into the sandbox as source text** (with ``attach_tracked``), so it must stay
+    self-contained: no ``gzip`` (not on the sandbox allowlist), no module globals.
+    """
+    header = fh.readline().rstrip("\n").split("\t")
+    return [dict(zip(header, ln.rstrip("\n").split("\t"))) for ln in fh if ln.strip()]
+
+
+SV_DIR = resources._CACHE / "sv_cohorts"
+
+
+def cohort_file(code: str) -> Path:
+    """One PCAWG cohort's SVs as a plain TSV the sandbox can read, built once if needed.
+
+    The pinned tarballs hold one gzipped BEDPE per sample; the sandbox has no ``gzip`` and is
+    granted only the roots the host names, so the host extracts the cohort's samples (from the
+    packaged catalog's aliquot list) into ``<cache>/sv_cohorts/<code>.tsv``: the 12 BEDPE
+    columns plus ``sample`` (aliquot id) and ``cohort`` (project code). Disposable cache.
+    """
+    import os
+    import tarfile
+
+    dest = (SV_DIR / f"{code}.tsv").resolve()  # resolved: see cli._grove_context
+    if dest.exists():
+        return dest
+    row = next((r for r in resources.pcawg_cohorts() if r["project_code"] == code), None)
+    if row is None:
+        raise KeyError(f"{code!r} is not a PCAWG SV cohort (see --list-cohorts)")
+    wanted = set(row["aliquot_ids"])
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f"{dest.name}.{os.getpid()}.tmp")
+    n = 0
+    with tmp.open("w") as out:
+        out.write("\t".join(_FIELDS + ("sample", "cohort")) + "\n")
+        for name in ("pcawg.sv.icgc", "pcawg.sv.tcga"):
+            with tarfile.open(resources.resolve(name)) as t:
+                for m in t.getmembers():
+                    aliquot = m.name.split("/")[-1].split(".")[0]
+                    if not m.name.endswith(".bedpe.gz") or aliquot not in wanted:
+                        continue
+                    with gzip.open(t.extractfile(m), "rt") as fh:
+                        for r in read_table(fh):
+                            out.write("\t".join([r[f] for f in _FIELDS] + [aliquot, code]) + "\n")
+                    n += 1
+    if n != len(wanted):
+        tmp.unlink()
+        raise RuntimeError(f"{code}: found {n} of {len(wanted)} samples in the pinned tarballs")
+    tmp.replace(dest)
+    return dest
 
 
 def attach(grove, records) -> int:
     """Attach one sample's SVs to a **mutable**, already-deserialized ``grove`` —
     the ``Layer``-contract entry point (``(grove, records) -> int``, matching
     ``ccres``/``enhancers``). Each record must carry a ``"sample"`` key alongside
-    the ``_FIELDS`` above; all records passed in one call are one sample's SVs.
-    Returns the number of SVs attached.
+    the ``_FIELDS`` above (and ``"cohort"``, carried onto the edge when present); one
+    call may hold many samples — a whole cohort. Returns the number of SVs attached.
 
     Ephemeral by construction, but this entry point doesn't track what it created
     — use ``attach_tracked`` when the grove is a warm copy that will be reused for
@@ -87,7 +142,6 @@ def attach_tracked(grove, records):
 
     created = []
     bins: dict[tuple, object] = {}  # (chrom, bin_start) -> bin Key, this call's own
-    sample = records[0]["sample"] if records else None
 
     def anchors(chrom, pos):
         at = pg.GenomicCoordinate("*", pos, pos)
@@ -126,7 +180,7 @@ def attach_tracked(grove, records):
         edge = {
             "rel": "breakpoint_edge", "svclass": svclass, "sv_id": r["sv_id"],
             "source_svclass": source_class, "junction_class": junction_class,
-            "sample": sample,
+            "sample": r["sample"], "cohort": r.get("cohort"),
             "chrom1": r["chrom1"], "pos1": int(r["start1"]), "strand1": r["strand1"],
             "chrom2": r["chrom2"], "pos2": int(r["start2"]), "strand2": r["strand2"],
             "pe_support": int(r["pe_support"]), "svmethod": r["svmethod"],
