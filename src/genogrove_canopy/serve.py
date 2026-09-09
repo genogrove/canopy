@@ -22,12 +22,14 @@ import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from genogrove_canopy import llm, resources, sandbox
+from genogrove_canopy import llm, preamble, resources, sandbox
 from genogrove_canopy.cli import (
     DEFAULT_COHORT,
     DEFAULT_MODEL,
     _BASE,
     _cohort_ids,
+    _pcawg_codes,
+    prepare_layers,
     _grove_context,
     _parse_output,
     _pygenogrove_site_dir,
@@ -70,17 +72,19 @@ def _grove(model: str) -> _Grove:
     return _GROVE
 
 
-def _serve_cohorts(cohort_override: str, cohort_hint: str):
-    """Grounded per-query cohort: UI picker override → the model's declared cohort → default.
-    Returns ``({name: accessions}, note_or_None)``; no catalog match → ``({}, note)``."""
+def _serve_cohorts(cohort_override: str, cohort_hint: str, layers):
+    """Grounded per-query cohort: UI picker override → the model's declared cohort → default
+    (enhancer questions only; see ``cli._resolve_query_cohorts``). Returns ``(cohorts, note)``."""
     if cohort_override:
         return _resolve_cohorts([cohort_override]), None
     if cohort_hint:  # `;`-separated, see cli._resolve_query_cohorts
         try:
             return _resolve_cohorts([c for c in map(str.strip, cohort_hint.split(";")) if c]), None
         except SystemExit:
-            return {}, f"no cohort matched {cohort_hint!r} — no enhancers loaded"
-    return _resolve_cohorts([DEFAULT_COHORT]), "default"
+            return {}, f"no cohort matched {cohort_hint!r} — nothing attached"
+    if "enhancers" in layers:
+        return _resolve_cohorts([DEFAULT_COHORT]), "default"
+    return {}, "SVs are per tumour cohort — name a tissue or pick a cohort; nothing attached"
 
 
 def _pipeline(question: str, cohort: str, model: str, emit) -> dict:
@@ -95,24 +99,25 @@ def _pipeline(question: str, cohort: str, model: str, emit) -> dict:
     grove = _grove(model)
 
     emit("step", "Generating the pygenogrove query")
-    cohort_hint, targets, code = llm.generate_query(question, grove.system_prompt, model=grove.model)
+    cohort_hint, layers, code = llm.generate_query(question, grove.system_prompt, model=grove.model)
 
     enh_pre, note = "", None
-    if targets:
-        from genogrove_canopy.layers import enhancers
+    if layers:
         # `why` is the internal reason flag; `note` is display text. Keeping them apart stops the
         # "default" sentinel leaking to the UI when a cohort resolves but finds no links.
-        cohorts, why = _serve_cohorts(cohort, cohort_hint)
+        cohorts, why = _serve_cohorts(cohort, cohort_hint, layers)
         note = None if why == "default" else why
-        cohort_ids = _cohort_ids(cohorts)
-        if cohort_ids:
-            emit("step", f"Attaching enhancers for cohort(s) {'; '.join(cohorts)}")
-            cohort_links = {cid: str(enhancers.links_file(cid))
-                            for cid in cohort_ids if enhancers.ensure_index(cid)}
-            if cohort_links:
-                enh_pre = enhancers.preamble(grove.gg, cohort_links)
-                note = f"enhancers attached from {'; '.join(cohorts)}" + (
-                    " (default)" if why == "default" else "")
+        said = []
+        cohort_links, sv_files = prepare_layers(cohorts, layers, lambda m: (emit("step", m), said.append(m)))
+        if cohort_links or sv_files:
+            enh_pre = preamble.build(grove.gg, cohort_links, sv_files)
+            what = " + ".join(w for w, d in (("enhancers", cohort_links), ("SVs", sv_files)) if d)
+            note = f"{what} attached from {'; '.join(cohorts)}" + (
+                " (default)" if why == "default" else "")
+        # a declared layer with nothing to attach is reported, never silently zero
+        gaps = [m for m in said if m.startswith("no ")]
+        if gaps:
+            note = "; ".join(([note] if note else []) + gaps)
 
     emit("step", "Running the query over the grove")
     result = grove.worker.submit("import json\n" + grove.preamble + enh_pre + code)

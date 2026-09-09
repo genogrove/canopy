@@ -270,6 +270,17 @@ RESOURCES: dict[str, Resource] = {
         filename="final_consensus_sv_bedpe_passonly.tcga.public.tgz",
         description="PCAWG consensus SV calls (v1.6), TCGA portion, hg19 original (liftover input).",
     ),
+    # PCAWG sample sheet: aliquot id -> donor, ICGC project code (the SV cohort unit: 47 codes
+    # hold every SV sample). Build input for `tools/build_pcawg_cohorts.py`, which derives the
+    # packaged `data/pcawg_cohorts.tsv`; never read at query time. Same bucket, same pin rule.
+    "pcawg.sample_sheet": Resource(
+        name="pcawg.sample_sheet",
+        url="https://object.genomeinformatics.org/icgc25k-open/PCAWG/donors_and_biospecimens/"
+            "pcawg_sample_sheet.tsv",
+        sha256="0dc9871196e5c4587b2b562d94e1c62305adc2daf7f9439a7ad759f17bec7572",
+        filename="pcawg_sample_sheet.tsv",
+        description="PCAWG sample sheet (aliquot -> donor, specimen, ICGC project code).",
+    ),
 }
 
 
@@ -706,6 +717,24 @@ def re2g_index_file(filename: str) -> Path:
     url = (f"https://huggingface.co/datasets/genogrove/canopy/resolve/"
            f"{RE2G_INDEX_COMMIT}/re2g/{filename}")
     return _download(url, manifest[filename], dest, label=f"rE2G {filename}")
+
+
+_PCAWG_COHORTS = Path(__file__).parent / "data" / "pcawg_cohorts.tsv"
+
+
+@lru_cache(maxsize=1)
+def pcawg_cohorts() -> list[dict]:
+    """The 47 PCAWG SV cohorts (ICGC project codes) from the packaged catalog, built by
+    ``tools/build_pcawg_cohorts.py`` from the pinned sample sheet + SV tarballs: one dict per
+    code with ``n_samples``, ``n_svs`` (ints) and ``aliquot_ids`` (list)."""
+    import csv
+
+    with _PCAWG_COHORTS.open(newline="") as fh:
+        rows = list(csv.DictReader(fh, delimiter="\t"))
+    for r in rows:
+        r["n_samples"], r["n_svs"] = int(r["n_samples"]), int(r["n_svs"])
+        r["aliquot_ids"] = r["aliquot_ids"].split(",")
+    return rows
 
 
 def re2g_cohorts() -> list[dict]:

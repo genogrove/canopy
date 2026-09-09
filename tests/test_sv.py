@@ -178,3 +178,41 @@ def test_parse_bedpe(tmp_path):
         "sv_id": "SV1", "pe_support": "5", "strand1": "+", "strand2": "-",
         "svclass": "DEL", "svmethod": "m",
     }]
+
+
+def test_cohort_file_extracts_a_cohorts_samples_into_one_plain_table(tmp_path, monkeypatch):
+    """The host builds `<cache>/sv_cohorts/<code>.tsv` from the pinned tarballs using the packaged
+    catalog's aliquot list: 12 BEDPE columns + sample + cohort, every listed sample present."""
+    import gzip
+    import io
+    import tarfile
+
+    from genogrove_canopy import resources
+
+    header = "\t".join(sv._FIELDS) + "\n"
+    tgz = tmp_path / "icgc.tgz"
+    with tarfile.open(tgz, "w:gz") as t:
+        for aliquot, rows in (("A1", "chr1\t100\t101\tchr1\t200\t201\tSV1\t5\t+\t-\tDEL\tm\n"),
+                              ("A2", "chr2\t300\t301\tchr3\t400\t401\tSV2\t7\t+\t+\tTRA\tm\n"),
+                              ("ZZ", "chr9\t1\t2\tchr9\t3\t4\tSV9\t1\t+\t-\tDEL\tm\n")):   # another cohort
+            data = gzip.compress((header + rows).encode())
+            info = tarfile.TarInfo(f"icgc/open/{aliquot}.pcawg_consensus_1.6.161116.somatic.sv.bedpe.gz")
+            info.size = len(data)
+            t.addfile(info, io.BytesIO(data))
+    empty = tmp_path / "tcga.tgz"
+    with tarfile.open(empty, "w:gz"):
+        pass
+    monkeypatch.setattr(resources, "resolve", lambda name: tgz if name == "pcawg.sv.icgc" else empty)
+    monkeypatch.setattr(resources, "pcawg_cohorts",
+                        lambda: [{"project_code": "TEST-XX", "n_samples": 2, "n_svs": 2, "aliquot_ids": ["A1", "A2"]}])
+    monkeypatch.setattr(sv, "SV_DIR", tmp_path / "sv_cohorts")
+
+    dest = sv.cohort_file("TEST-XX")
+    rows = sv.parse_bedpe(dest)
+    assert dest == (tmp_path / "sv_cohorts" / "TEST-XX.tsv").resolve()
+    assert [(r["sv_id"], r["sample"], r["cohort"]) for r in rows] == [("SV1", "A1", "TEST-XX"), ("SV2", "A2", "TEST-XX")]
+    assert set(rows[0]) == set(sv._FIELDS) | {"sample", "cohort"}
+    assert not list((tmp_path / "sv_cohorts").glob("*.tmp"))
+    with pytest.raises(KeyError):
+        sv.cohort_file("NOPE-XX")
+

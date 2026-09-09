@@ -13,9 +13,10 @@ import argparse
 import json
 import sys
 import time
+from functools import lru_cache
 from pathlib import Path
 
-from genogrove_canopy import __version__, llm, log, resources, sandbox
+from genogrove_canopy import __version__, llm, log, preamble, resources, sandbox
 
 # Default Anthropic model for code generation. Opus is the most capable tier and
 # the connected-interval reasoning here is the paper's headline contribution, so
@@ -96,30 +97,72 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _resolve_cohorts(specs):
-    """Map ``--cohort`` specs to ``{cohort name: [accessions]}`` via ``re2g_cohorts``.
+_BRIDGE = Path(__file__).parent / "data" / "cohorts.tsv"
 
-    Each spec matches a cohort by exact ontology id or case-insensitive substring of its
-    name; the most-replicated match wins (the catalog is sorted by replicate count). Raises
+
+@lru_cache(maxsize=1)
+def _bridge() -> list[dict]:
+    """The curated tissue-term rows of ``data/cohorts.tsv`` (see its header)."""
+    import csv
+
+    with _BRIDGE.open() as fh:
+        rows = list(csv.DictReader((ln for ln in fh if not ln.startswith("#")), delimiter="\t"))
+    for r in rows:
+        r["aliases"] = [a for a in r["aliases"].split(";") if a]
+        r["re2g"] = [r["re2g"]] if r["re2g"] else []
+        r["pcawg"] = [c for c in r["pcawg"].split(",") if c]
+    return rows
+
+
+def _resolve_cohorts(specs):
+    """Map cohort specs (``--cohort`` values or the model's ``COHORT:`` terms) to per-layer keys:
+    ``{label: {"re2g": [ontology ids], "pcawg": [project codes]}}``.
+
+    Each spec resolves, in order, as: a layer key as written (an rE2G ontology id, a PCAWG
+    project code); a bridge term or alias (``data/cohorts.tsv`` — one tissue word gives both
+    layers' keys, which is what lets one ``COHORT:`` line drive enhancers *and* SVs); or a
+    case-insensitive substring of an rE2G biosample name (most-replicated match wins). Raises
     ``SystemExit`` with a pointer to ``--list-cohorts`` on no match.
     """
     catalog = resources.re2g_cohorts()
+    pcawg = {r["project_code"] for r in resources.pcawg_cohorts()}
     chosen = {}
     for spec in specs:
         s = spec.strip().lower()
-        match = next((c for c in catalog if c["ontology_id"].lower() == s), None) or \
-            next((c for c in catalog if s in c["name"].lower()), None)
-        if match is None:
+        hit = next((c for c in catalog if c["ontology_id"].lower() == s), None)
+        if hit:
+            chosen[hit["name"]] = {"re2g": [hit["ontology_id"]], "pcawg": []}
+            continue
+        if spec.strip().upper() in pcawg:
+            chosen[spec.strip().upper()] = {"re2g": [], "pcawg": [spec.strip().upper()]}
+            continue
+        row = next((r for r in _bridge() if s == r["term"] or s in (a.lower() for a in r["aliases"])), None)
+        if row:
+            chosen[row["term"]] = {"re2g": row["re2g"], "pcawg": row["pcawg"]}
+            continue
+        hit = next((c for c in catalog if s in c["name"].lower()), None)
+        if hit is None:
             raise SystemExit(f"canopy: no cohort matches {spec!r} — see --list-cohorts")
-        chosen[match["name"]] = match["accessions"]
+        chosen[hit["name"]] = {"re2g": [hit["ontology_id"]], "pcawg": []}
     return chosen
 
 
 def _list_cohorts() -> None:
-    """Print the available rE2G cohorts (most-replicated first) to stdout."""
+    """Print what ``--cohort`` / ``COHORT:`` can name: the tissue terms that drive both layers,
+    then each layer's own keys (rE2G biosamples most-replicated first, PCAWG project codes)."""
+    print("# tissue terms (data/cohorts.tsv) — one word resolves both layers")
+    print(f"{'term':14}  {'rE2G':14}  {'PCAWG':32}  aliases")
+    for r in _bridge():
+        print(f"{r['term']:14}  {(r['re2g'] or ['-'])[0]:14}  {','.join(r['pcawg']) or '-':32}  "
+              f"{'; '.join(r['aliases'])}")
+    print("\n# ENCODE-rE2G biosamples (enhancers)")
     print(f"{'ontology id':16}  {'reps':>4}  {'type':16}  name")
     for c in resources.re2g_cohorts():
         print(f"{c['ontology_id']:16}  {c['n_replicates']:>4}  {c['type']:16}  {c['name']}")
+    print("\n# PCAWG project codes (structural variants)")
+    print(f"{'code':10}  {'samples':>7}  {'SVs':>7}")
+    for r in resources.pcawg_cohorts():
+        print(f"{r['project_code']:10}  {r['n_samples']:>7}  {r['n_svs']:>7}")
 
 
 def _grove_context():
@@ -129,23 +172,23 @@ def _grove_context():
     the ENCODE cCRE registry, built into the pinned artifact rather than baked on first run (see
     ``resources.ensure_all_grove``). The preamble binds ``GROVE`` to an open ``GroveView`` of it,
     so one `intersect` returns genes *and* cCREs. The enhancer layer is **not** in the artifact
-    (it is cohort-specific): when the model declares ``COHORT``/``TARGETS``, ``_answer`` appends
-    ``enhancers.preamble(gg, cohort_links)``, which rebinds ``GROVE`` to a mutable copy with that
+    (it is cohort-specific): when the model declares ``COHORT``/``LAYERS``, ``_answer`` appends
+    ``preamble.build(gg, cohort_links)``, which rebinds ``GROVE`` to a mutable copy with that
     cohort's nodes and edges attached — same name, so generated code never opens a path itself.
     """
     from genogrove_canopy import layers
-    from genogrove_canopy.layers import enhancers
+    from genogrove_canopy.layers import enhancers, sv
 
     # Resolved: the sandbox compares every read against `Path.resolve()`d roots, so a symlinked
     # cache dir spelled two ways would refuse its own grove.
     gg = str(resources.ensure_all_grove(_BASE).resolve())
     block = resources_block(
         "GROVE", resources.RESOURCES[_BASE].description,
-        layers.catalogue_block(["ccre", "enhancers"]),
+        layers.catalogue_block(["ccre", "enhancers", "sv"]),
     )
     # The sandbox reads only these roots. `LINKS_DIR` is where `enhancers.preamble`'s
     # `attach_links` opens a cohort's links table, so it must be granted alongside the grove.
-    return block, enhancers.preamble(gg), [gg, str(enhancers.LINKS_DIR.resolve())]
+    return block, preamble.build(gg), [gg, str(enhancers.LINKS_DIR.resolve()), str(sv.SV_DIR.resolve())]
 
 
 def resources_block(var: str, description: str, layers_block: str) -> str:
@@ -158,15 +201,20 @@ def resources_block(var: str, description: str, layers_block: str) -> str:
     """
     return (
         f"- `{var}`: an **open** grove handle ({description}) — gene/transcript/exon structure "
-        f"**plus the ENCODE cCRE nodes**, and, when you declare `COHORT`/`TARGETS` (see "
-        f"\"Enhancers\"), that cohort's rE2G enhancer nodes and edges, attached by the host before "
-        f"your code runs. Query `{var}` directly. **Never open a path yourself** — a handle you "
+        f"**plus the ENCODE cCRE nodes**, and, when you declare `COHORT`/`LAYERS` (see "
+        f"\"Per-question layers\"), that cohort's rE2G enhancer nodes/edges and/or PCAWG "
+        f"breakpoint edges, attached by the host before your code runs. Query `{var}` directly. "
+        f"**Never open a path yourself** — a handle you "
         f"open lacks the attached layer. A **located** query (a variant at chr7:55191822) reads "
         f"just that locus; a **genome-wide / gene-name** query works from the same handle. "
         f"Read-only — mutators raise; query with: {', '.join(f'`{m}`' for m in QUERY_SURFACE)}.\n"
         f"  Layers in the grove — nodes come back from `intersect` alongside genes, filter on "
         f"`source`/`type`:\n"
         f"  {layers_block.replace(chr(10), chr(10) + '  ')}\n"
+        f"- `COHORT:` terms that resolve both layers (data/cohorts.tsv): "
+        f"{', '.join(r['term'] for r in _bridge())}. A plain tissue word means the tissue "
+        f"biosample for enhancers; the disease word ('liver cancer', 'HCC') means the cancer cell "
+        f"line. An ENCODE biosample name/id or a PCAWG project code resolves one layer directly.\n"
     )
 
 
@@ -313,19 +361,51 @@ def _pygenogrove_site_dir() -> str:
     return str(f.parent.parent if f.name == "__init__.py" else f.parent)
 
 
-def _resolve_query_cohorts(args, cohort_hint):
-    """Grounded cohort resolution for a query that needs enhancers, precedence-ordered:
-    ``--cohort`` override → the model's declared ``COHORT`` (matched against the catalog; no
-    match → none, so a wrong tissue is never silently substituted) → the default cohort.
-    Returns ``({name: accessions}, note)`` where ``note`` is a stderr line or ``None``."""
+def _resolve_query_cohorts(args, cohort_hint, layers):
+    """Grounded cohort resolution for a query that declared ``layers``, precedence-ordered:
+    ``--cohort`` override → the model's declared ``COHORT`` (resolved against the catalogs; no
+    match → none, so a wrong tissue is never silently substituted) → the default cohort, but
+    **only for an enhancer question**: SVs are per tumour cohort and there is no honest default.
+    Returns ``(cohorts, note)`` — the ``_resolve_cohorts`` map and a stderr line or ``None``."""
     if args.cohort:
         return _resolve_cohorts(args.cohort), None
     if cohort_hint:  # one or more, `;`-separated — a comparison question names several
         try:
             return _resolve_cohorts([c for c in map(str.strip, cohort_hint.split(";")) if c]), None
         except SystemExit:  # the model named a tissue with no catalog match — don't substitute
-            return {}, f"no ENCODE cohort matched {cohort_hint!r} — no enhancers loaded (see --list-cohorts)"
-    return _resolve_cohorts([DEFAULT_COHORT]), "default"
+            return {}, f"no cohort matched {cohort_hint!r} — nothing attached (see --list-cohorts)"
+    if "enhancers" in layers:
+        return _resolve_cohorts([DEFAULT_COHORT]), "default"
+    return {}, "SVs are per tumour cohort — name a tissue or pass --cohort; nothing attached"
+
+
+def prepare_layers(cohorts, layers, say):
+    """Materialise the declared ``layers`` for the resolved ``cohorts`` (host side, shared by
+    the CLI and ``serve``): returns ``(cohort_links, sv_files)`` for ``preamble.build``.
+    ``say(text)`` reports progress and, per declared layer that has **no** key in these
+    cohorts, says so — the generated code would otherwise run with an empty ``COHORTS`` /
+    ``SV_COHORTS`` and print a plausible-looking zero."""
+    from genogrove_canopy.layers import enhancers, sv
+
+    cohort_links, sv_files = {}, {}
+    names = "; ".join(cohorts)
+    if "enhancers" in layers:
+        ids = _cohort_ids(cohorts)
+        if ids:
+            say(f"Loading ENCODE-rE2G links — cohort(s) {names}")
+            cohort_links = {cid: str(enhancers.links_file(cid)) for cid in ids if enhancers.ensure_index(cid)}
+            if not cohort_links:
+                say(f"no rE2G index for cohort(s) {names} — no enhancers attached")
+        elif cohorts:
+            say(f"no rE2G biosample for cohort(s) {names} — no enhancers attached")
+    if "sv" in layers:
+        codes = _pcawg_codes(cohorts)
+        if codes:
+            say(f"Loading PCAWG SVs — cohort(s) {'; '.join(codes)}")
+            sv_files = {c: str(sv.cohort_file(c)) for c in codes}
+        elif cohorts:
+            say(f"no PCAWG cohort for cohort(s) {names} — no SVs attached")
+    return cohort_links, sv_files
 
 
 def _prepare() -> None:
@@ -337,32 +417,17 @@ def _prepare() -> None:
 
 
 def _cohort_ids(cohorts) -> list:
-    """Ontology ids for the selected cohort **names** — the enhancer index is keyed by id."""
-    if not cohorts:
-        return []
-    name2id = {c["name"]: c["ontology_id"] for c in resources.re2g_cohorts()}
-    return [name2id[n] for n in cohorts if n in name2id]
+    """The rE2G ontology ids across the resolved ``cohorts`` (the enhancer index is keyed by id)."""
+    return [i for c in cohorts.values() for i in c["re2g"]]
+
+
+def _pcawg_codes(cohorts) -> list:
+    """The PCAWG project codes across the resolved ``cohorts`` (the SV cohort unit)."""
+    return [i for c in cohorts.values() for i in c["pcawg"]]
 
 
 
-def _describe_targets(targets) -> str:
-    """Name what the enhancer lookup is for, e.g. ``gene AR`` or ``2 regions``.
-
-    The model declares targets as ``{"gene": …}`` / ``{"region": …}``; a log line saying only
-    "loading enhancers" leaves the reader unable to tell a wrong-gene answer from a right one.
-    """
-    genes = [t["gene"] for t in targets if t.get("gene")]
-    regions = [t["region"] for t in targets if t.get("region")]
-    parts = []
-    if genes:
-        parts.append(f"gene{'s' if len(genes) > 1 else ''} {', '.join(genes)}")
-    if regions:
-        parts.append(f"{len(regions)} region{'s' if len(regions) > 1 else ''}"
-                     if len(regions) > 1 else f"region {regions[0]}")
-    return " and ".join(parts) or "the declared targets"
-
-
-def _answer(question, *, system_prompt, preamble, gg, args, execute):
+def _answer(question, *, system_prompt, base, gg, args, execute):
     """Translate one question to code, run it via ``execute(script)``, and render.
 
     ``execute`` is a ``script -> SandboxResult`` callable (``sandbox.run`` for one-shot,
@@ -371,45 +436,37 @@ def _answer(question, *, system_prompt, preamble, gg, args, execute):
     attach sits between code-gen and execution, and leaving it out made the reported total
     wrong by however long it took.
 
-    The enhancer layer is resolved **per question**: the model declares ``COHORT``/``TARGETS``,
+    Per-question layers are resolved **per question**: the model declares ``COHORT``/``LAYERS``,
     the host grounds the cohort(s) (``--cohort`` overrides, repeatable), and each cohort's links
     are attached onto the mutable grove in the sandbox — reused warm across turns via
     ``_CANOPY_STATE`` — rather than fetched per target and injected as a list.
     """
     log.say(f"Generating a pygenogrove query ({args.model})")
     t0 = time.perf_counter()
-    cohort_hint, targets, code = llm.generate_query(question, system_prompt, model=args.model)
+    cohort_hint, layers, code = llm.generate_query(question, system_prompt, model=args.model)
     gen_s = time.perf_counter() - t0
     log.took("Query generated", gen_s)
     if args.show_code:
         print("# --- generated code ---", file=sys.stderr)
         print(code, file=sys.stderr)
     enh_pre, enh_s = "", 0.0
-    if targets:  # an enhancer/regulation question — resolve the cohort(s) and attach their links
-        from genogrove_canopy.layers import enhancers
-        cohorts, note = _resolve_query_cohorts(args, cohort_hint)
-        cohort_ids = _cohort_ids(cohorts)
-        cohort_links = {}
-        if cohort_ids:  # announce only once there is somewhere to load from
-            log.say(f"Loading ENCODE-rE2G links for {_describe_targets(targets)} — "
-                    f"cohort(s) {'; '.join(cohorts)}")
-            t_enh = time.perf_counter()
-            cohort_links = {cid: str(enhancers.links_file(cid))
-                            for cid in cohort_ids if enhancers.ensure_index(cid)}
-            enh_s = time.perf_counter() - t_enh
-        if cohort_links:
-            enh_pre = enhancers.preamble(gg, cohort_links)
-            src = " (default — name a tissue or pass --cohort)" if note == "default" else ""
-            log.took(f"rE2G: attached {'; '.join(cohorts)}{src}", enh_s)
-        elif note and note != "default":
+    if layers:  # a per-question layer was declared — resolve the cohort(s), prepare its data
+        cohorts, note = _resolve_query_cohorts(args, cohort_hint, layers)
+        if note and note != "default":
             log.say(note)
-        elif cohort_ids:
-            log.took("rE2G: no index available for those cohorts", enh_s)
+        t_enh = time.perf_counter()
+        cohort_links, sv_files = prepare_layers(cohorts, layers, log.say)
+        enh_s = time.perf_counter() - t_enh
+        if cohort_links or sv_files:
+            enh_pre = preamble.build(gg, cohort_links, sv_files)
+            src = " (default — name a tissue or pass --cohort)" if note == "default" else ""
+            what = " + ".join(w for w, d in (("rE2G", cohort_links), ("SV", sv_files)) if d)
+            log.took(f"{what}: attached {'; '.join(cohorts)}{src}", enh_s)
     # JSONL is the output contract, so guarantee `json` is importable even if the
     # generated code forgets the import (it's already in the allowlist).
     log.say("Running the query over the grove")
     t1 = time.perf_counter()
-    result = execute("import json\n" + preamble + enh_pre + code)
+    result = execute("import json\n" + base + enh_pre + code)
     exec_s = time.perf_counter() - t1
     if result.returncode != 0 or result.timed_out:
         return "", (result.stderr.strip() or "(the generated code failed with no output)"), gen_s, enh_s, exec_s
@@ -437,7 +494,7 @@ def _interactive(args, *, system_prompt, preamble, data_paths, site_dir) -> int:
                 break
             try:
                 out, err, gen_s, enh_s, exec_s = _answer(question, system_prompt=system_prompt,
-                                                  preamble=preamble, gg=data_paths[0], args=args,
+                                                  base=preamble, gg=data_paths[0], args=args,
                                                   execute=worker.submit)
             except Exception as exc:  # e.g. an LLM error — keep the session alive
                 print(f"canopy: {exc}", file=sys.stderr)
@@ -486,7 +543,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         # The grove is cohort-independent (GENCODE + cCREs). Enhancers are resolved
-        # per question from the model's declared COHORT/TARGETS — see _answer.
+        # per question from the model's declared COHORT/LAYERS — see _answer.
         _prepare()
         resources_block, preamble, data_paths = _grove_context()
         site_dir = _pygenogrove_site_dir()
@@ -503,7 +560,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:  # one-shot: a fresh sandbox per invocation
         out, err, _gen_s, _enh_s, _exec_s = _answer(
-            args.question, system_prompt=system_prompt, preamble=preamble, gg=data_paths[0],
+            args.question, system_prompt=system_prompt, base=preamble, gg=data_paths[0],
             args=args,
             execute=lambda s: sandbox.run(s, data_paths=data_paths, extra_syspath=[site_dir]),
         )

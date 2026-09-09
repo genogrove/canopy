@@ -19,6 +19,9 @@ DEFAULT_MODEL = "claude-opus-4-8"
 
 _SYSTEM_MD = Path(__file__).with_name("prompts") / "system.md"
 
+#: The per-question layers the host knows how to attach (see `cli.prepare_layers`).
+_LAYERS = frozenset(("enhancers", "sv"))
+
 #: Ways a model spells "no biosample" instead of omitting the line as system.md asks. Normalised
 #: to "" so the host doesn't hand a placeholder to the ENCODE catalog. This is deliberately
 #: permissive: canopy is meant to be model-agnostic, and treating one vendor's phrasing as the
@@ -47,12 +50,12 @@ def build_system_prompt(resources_block: str) -> str:
 def generate_query(question: str, system_prompt: str, *, model: str = DEFAULT_MODEL, on_usage=None):
     """Translate ``question`` into ``pygenogrove`` Python via Claude.
 
-    Returns ``(cohort, targets, code)``: ``cohort`` is the biosample/cell-line(s) the model read
+    Returns ``(cohort, layers, code)``: ``cohort`` is the tissue/cohort term(s) the model read
     from the question (``""`` if none named; ``;``-separated if several; the host resolves it
-    against the ENCODE catalog and attaches those cohorts into the grove before running
-    ``code``), ``targets`` is the declared enhancer targets — ``{"gene": ...}`` /
-    ``{"region": ...}`` — whose presence marks the question as regulatory (empty otherwise).
-    ``code`` is the generated Python. The caller runs it through the
+    against the catalogs and attaches those cohorts into the grove before running ``code``),
+    ``layers`` the per-question layers it declared (``LAYERS: enhancers; sv``; a non-empty
+    ``TARGETS`` counts as ``enhancers``), empty for a plain structural question. ``code`` is the
+    generated Python. The caller runs it through the
     sandbox; nothing is executed here. Raises ``RuntimeError`` if the model declines.
 
     ``on_usage``, if given, is called with the response's ``usage`` object before parsing — a
@@ -79,10 +82,11 @@ def generate_query(question: str, system_prompt: str, *, model: str = DEFAULT_MO
 
 
 def parse_targets_and_code(text: str):
-    """Split the model's reply into ``(cohort, targets, code)``.
+    """Split the model's reply into ``(cohort, layers, code)``.
 
-    ``cohort`` comes from an optional ``COHORT: <name>`` line, ``targets`` from an optional
-    ``TARGETS: [ ... ]`` JSON line (both outside the code fence; absent/malformed → ``""`` / ``[]``).
+    ``cohort`` comes from an optional ``COHORT: <term(s)>`` line, ``layers`` from an optional
+    ``LAYERS: enhancers; sv`` line (a non-empty legacy ``TARGETS: [...]`` also means
+    ``enhancers``); both outside the code fence; absent/malformed → ``""`` / ``[]``.
     ``code`` is the fenced program (or the text as-is)."""
     import json
 
@@ -96,23 +100,23 @@ def parse_targets_and_code(text: str):
         if cohort.lower() in _NO_COHORT:
             cohort = ""
 
-    targets = []
+    layers = []
+    ml = re.search(r"^[ \t]*LAYERS:[ \t]*(.+?)[ \t]*$", text, re.MULTILINE)
+    if ml:  # only the layers the host can attach; anything else would trigger an empty resolve
+        layers = [w for w in (x.strip().lower() for x in re.split(r"[;,]", ml.group(1))) if w in _LAYERS]
+    # `TARGETS: [...]` was the earlier way to say "this is an enhancer question"; its content
+    # (genes/regions) is not used — a whole cohort is attached — so it is just `enhancers` now.
     mt = re.search(r"^\s*TARGETS:\s*(\[.*?\])\s*$", text, re.MULTILINE | re.DOTALL)
-    if mt:
-        try:
-            parsed = json.loads(mt.group(1))
-            if isinstance(parsed, list):
-                targets = [t for t in parsed if isinstance(t, dict)]
-        except ValueError:
-            pass
+    if mt and mt.group(1).strip() != "[]" and "enhancers" not in layers:
+        layers.append("enhancers")
 
     code = _strip_code_fence(text)
     # Defensive: strip any COHORT:/TARGETS: declaration lines that leaked into the program body
     # (e.g. the model fenced them with the code). `COHORT: MCF-7` is a valid Python annotation
     # that would NameError at runtime, so never let it reach the sandbox.
     code = "\n".join(ln for ln in code.splitlines()
-                     if not re.match(r"\s*(COHORT|TARGETS)\s*:", ln)).strip() + "\n"
-    return cohort, targets, code
+                     if not re.match(r"\s*(COHORT|TARGETS|LAYERS)\s*:", ln)).strip() + "\n"
+    return cohort, layers, code
 
 
 def _strip_code_fence(text: str) -> str:
