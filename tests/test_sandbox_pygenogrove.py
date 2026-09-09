@@ -245,19 +245,19 @@ def test_system_prompt_sv_example_runs_against_the_attached_grove(tmp_path):
 
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
-    assert lines[0] == "MYC rearrangements in BRCA-US (3 SVs, 3 tumours, 2 joined to a gene):"  # 4 edges, 3 SVs
+    assert lines[0] == "MYC rearrangements in BRCA-US (3 SVs in 3 tumours, 1 joining MYC to another gene):"
     rows = [json.loads(ln) for ln in lines[1:]]
-    assert [(r["svclass"], r["name"], r["type"]) for r in rows] == [
-        ("DEL", "PVT1", "gene"), ("DEL", "PVT1-AS", "gene"),
-        ("INV", "intergenic", "breakpoint"), ("TRA", "intergenic", "breakpoint")]
-    assert (rows[0]["start"], rows[0]["end"]) == (127_890_000, 127_900_000)          # a gene partner: the gene
-    assert rows[0]["myc_breakpoint"] == "chr8:127740000" and rows[0]["partner_breakpoint"] == "chr8:127897000"
-    assert rows[0]["sample"] == "A1" and rows[0]["cohort"] == "BRCA-US"
-    # an intergenic partner: the breakpoint itself, never the 1 Mb bin it anchors to
-    assert (rows[2]["chrom"], rows[2]["start"], rows[2]["end"]) == ("chr8", 130_500_000, 130_500_000)
-    # the translocation's partner is on chr7, even though MYC is breakend 2 of the record
-    assert (rows[3]["chrom"], rows[3]["start"], rows[3]["end"]) == ("chr7", 132_052_174, 132_052_174)
-    assert rows[3]["partner_breakpoint"] == "chr7:132052174" and rows[3]["myc_breakpoint"] == "chr8:127741149"
+    assert [(r["sv"], r["bp1_gene"], r["bp2_gene"]) for r in rows] == [
+        ("DEL", "MYC", "PVT1,PVT1-AS"),            # one row per SV; both overlapping genes named
+        ("INV", "MYC", "intergenic"),
+        ("TRA", "intergenic", "MYC")]              # MYC is breakend 2 of this record
+    # DEL/INV: the row is the reference segment the event acts on, with its size
+    assert (rows[0]["chrom"], rows[0]["start"], rows[0]["end"], rows[0]["size"]) == ("chr8", 127_740_000, 127_897_000, 157_000)
+    assert (rows[1]["start"], rows[1]["end"], rows[1]["size"]) == (127_738_000, 130_500_000, 2_762_000)
+    # TRA: no segment — the row is the MYC-side breakpoint, both breakpoints spelled out
+    assert (rows[2]["chrom"], rows[2]["start"], rows[2]["end"], rows[2]["size"]) == ("chr8", 127_741_149, 127_741_149, None)
+    assert rows[2]["bp1"] == "chr7:132052174" and rows[2]["bp2"] == "chr8:127741149"
+    assert rows[0]["sample"] == "A1" and rows[0]["cohort"] == "BRCA-US" and rows[0]["support"] == 12
 
 
 def test_warm_worker_grows_by_sv_cohort_and_sv_cohorts_scopes_each_question(tmp_path):
