@@ -180,9 +180,11 @@ def _grove_context():
     the ENCODE cCRE registry, built into the pinned artifact rather than baked on first run (see
     ``resources.ensure_all_grove``). The preamble binds ``GROVE`` to an open ``GroveView`` of it,
     so one `intersect` returns genes *and* cCREs. The enhancer layer is **not** in the artifact
-    (it is cohort-specific): when the model declares ``COHORT``/``LAYERS``, ``_answer`` appends
-    ``preamble.build(gg, cohort_links)``, which rebinds ``GROVE`` to a mutable copy with that
-    cohort's nodes and edges attached — same name, so generated code never opens a path itself.
+    (it is cohort-specific): when the model declares ``COHORT``/``LAYERS``, ``_answer`` runs
+    ``preamble.build(gg, cohort_links, sv_files)`` **instead of** this base preamble — the two
+    are exclusive, never concatenated: the base one evicts ``_CANOPY_STATE`` from the query's
+    namespace, the cohort one memoises the attached grove in it. Both bind ``GROVE``, so
+    generated code never opens a path itself.
     """
     from genogrove_canopy import layers
     from genogrove_canopy.layers import enhancers, sv

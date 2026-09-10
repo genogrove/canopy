@@ -42,6 +42,6 @@ def test_layer_plain_layer_questions_reuse_one_attached_grove(tmp_path, monkeypa
             assert not err, err
             return cli._parse_output(out)[0]
         assert ask("BRCA-US") == [{"samples": ["S1"]}]
-        ask("")
+        assert ask("") == []                                  # a plain question in between must not evict the memo
         assert ask("BRCA-UK") == [{"samples": ["S1", "S2"]}]
         assert ask("BRCA-US") == [{"samples": ["S1", "S2"]}]

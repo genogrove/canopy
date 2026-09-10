@@ -66,12 +66,17 @@ def test_answer_wires_the_declared_layers_for_the_resolved_cohort(monkeypatch, t
         truncated = False
         returncode, timed_out, stdout, stderr = 0, False, "ok: 1", ""
     args = type("A", (), {"model": "m", "show_code": False, "cohort": None, "format": "tsv"})()
-    out, err, *_ = cli._answer("SVs near MYC in BRCA-US?", system_prompt="", base="", gg="/x.gg",
+    from genogrove_canopy import preamble
+    base = preamble.build("/x.gg")                    # the real base, as _grove_context hands it over
+    out, err, *_ = cli._answer("SVs near MYC in BRCA-US?", system_prompt="", base=base, gg="/x.gg",
                                args=args, execute=lambda s: scripts.append(s) or _R())
     assert err == "" and len(scripts) == 1
     script = scripts[0]
     assert "def attach_tracked(" in script and f'["BRCA-US", "{table}"]' in script
     assert 'SV_COHORTS = ["BRCA-US"]' in script and "COHORTS = []" in script
+    # exactly one preamble: the base one evicts the worker memo, so it must not precede the
+    # cohort one (that concatenation is what silently disabled the warm grove)
+    assert script.count("GROVE = ") == 1 and "globals().pop('_CANOPY_STATE', None)" not in script
 
 
 def test_sv_question_without_a_cohort_gets_no_default(monkeypatch):

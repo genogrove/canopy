@@ -82,7 +82,7 @@ def test_enhancer_preamble_attaches_links_inside_the_sandbox(tmp_path, monkeypat
 
 
 def test_warm_worker_reuses_the_attached_grove_and_a_query_cannot_mutate_it(tmp_path):
-    """The path `serve` and `-i` always take: the cohort preamble runs twice in one `Worker`.
+    """The script `serve` and `-i` now hand the worker: the cohort preamble, alone, twice in one `Worker`.
     The second run must hit `_CANOPY_STATE` (no re-attach) and see exactly what the first saw —
     even though the first query tried to insert into `GROVE`, which the read-only view refuses."""
     from genogrove_canopy.layers import enhancers
