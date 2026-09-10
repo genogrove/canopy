@@ -120,7 +120,7 @@ def _pipeline(question: str, cohort: str, model: str, emit) -> dict:
             note = "; ".join(([note] if note else []) + gaps)
 
     emit("step", "Running the query over the grove")
-    result = grove.worker.submit("import json\n" + grove.preamble + enh_pre + code)
+    result = grove.worker.submit("import json\n" + (enh_pre or grove.preamble) + code)
     err = sandbox.result_error(result)
     if err:
         return {"error": err, "code": code}

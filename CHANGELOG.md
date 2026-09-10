@@ -141,6 +141,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#6](https://github.com/genogrove/canopy/pull/6)).
 
 ### Fixed
+- **Warm layer reuse works in production**: the CLI and web adapters ran the base preamble
+  (which evicts the worker memo) in front of the cohort preamble, so every enhancer or SV
+  question re-deserialized the grove and re-attached its cohorts. They now select one preamble,
+  and cohorts accumulate across questions as designed
+  ([#34](https://github.com/genogrove/canopy/pull/34)).
 - **Truncated or failed sandbox output is never rendered as an answer**: the CLI and the web UI
   share one validator — a non-zero exit or timeout reports the traceback, output cut at the
   sandbox cap is refused as incomplete rather than parsed into a partial table (a cut JSON line
