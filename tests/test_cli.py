@@ -68,7 +68,7 @@ def test_answer_wires_the_declared_layers_for_the_resolved_cohort(monkeypatch, t
     args = type("A", (), {"model": "m", "show_code": False, "cohort": None, "format": "tsv"})()
     from genogrove_canopy import preamble
     base = preamble.build("/x.gg")                    # the real base, as _grove_context hands it over
-    out, err, *_ = cli._answer("SVs near MYC in BRCA-US?", system_prompt="", base=base, gg="/x.gg",
+    _out, err, *_ = cli._answer("SVs near MYC in BRCA-US?", system_prompt="", base=base, gg="/x.gg",
                                args=args, execute=lambda s: scripts.append(s) or _R())
     assert err == "" and len(scripts) == 1
     script = scripts[0]
