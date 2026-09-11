@@ -141,6 +141,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#6](https://github.com/genogrove/canopy/pull/6)).
 
 ### Fixed
+- **`sv.detach` removes exactly its own attachment**: it used to drop the first edge between a
+  pair and every bin it had created, so with cohorts accumulating on one grove a detach could
+  take another attachment's edge or a bin another attachment still used. It now consumes the
+  tracked (target, payload) multiplicities per source, keeps every other edge in order, and
+  removes a bin only when no edge uses it. Tracked edge entries carry their payload
+  (`("edge", a, b, payload)`). The `api-surface` CI job now runs on any `src/` or `tests/` change
+  ([#35](https://github.com/genogrove/canopy/pull/35)).
 - **Warm layer reuse works in production**: the CLI and web adapters ran the base preamble
   (which evicts the worker memo) in front of the cohort preamble, so every enhancer or SV
   question re-deserialized the grove and re-attached its cohorts. They now select one preamble,
