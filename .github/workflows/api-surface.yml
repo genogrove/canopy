@@ -4,28 +4,24 @@ name: API surface
 # bindings-dependent test skips there and nothing verifies the codegen contract against the build
 # it is pinned to. This job does a real `uv sync` (compiling the C++ core) so those tests bind.
 #
-# Path-filtered rather than run on every PR: surface drift can only enter when the pin moves or the
-# advertised contract changes, so guarding those transitions catches it without paying a compile on
-# unrelated PRs. The workflow lists itself, so changes to this file are exercised by their own PR.
+# Path-filtered so a docs- or data-only PR does not pay the compile: anything under src/ or tests/
+# can call the bindings (the layers, the preamble and the sandbox all do), so every source change
+# runs it. The workflow lists itself, so changes to this file are exercised by their own PR.
 on:
   pull_request:
     paths:
       - "pyproject.toml"
       - "uv.lock"
-      - "src/genogrove_canopy/resources.py"
-      - "src/genogrove_canopy/prompts/system.md"
-      - "src/genogrove_canopy/cli.py"
-      - "tests/test_api_surface.py"
+      - "src/**"
+      - "tests/**"
       - ".github/workflows/api-surface.yml"
   push:
     branches: [main]
     paths:  # same filter — `paths` is per-trigger, so without this every merge pays the compile
       - "pyproject.toml"
       - "uv.lock"
-      - "src/genogrove_canopy/resources.py"
-      - "src/genogrove_canopy/prompts/system.md"
-      - "src/genogrove_canopy/cli.py"
-      - "tests/test_api_surface.py"
+      - "src/**"
+      - "tests/**"
       - ".github/workflows/api-surface.yml"
   workflow_dispatch:  # so it can be run by hand against any branch
 

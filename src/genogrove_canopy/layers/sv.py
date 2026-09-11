@@ -161,7 +161,7 @@ def attach_tracked(grove, records, bin_size=1_000_000):  # literal: the def runs
                         and k.value.start == bin_start), None)
         if key is None:
             key = grove.insert(chrom, pg.GenomicCoordinate(".", bin_start, bin_start + bin_size - 1),
-                               {"type": "intergenic_region", "_sv_owned": True})
+                               {"type": "intergenic_region"})
             created.append(("key", chrom, key))
         bins[(chrom, bin_start)] = key
         return [key]
@@ -209,7 +209,7 @@ def attach_tracked(grove, records, bin_size=1_000_000):  # literal: the def runs
 
 
 def detach(grove, created) -> None:
-    """Remove this attachment's edge multiplicities, then its unused SV-owned bins.
+    """Remove this attachment's edge multiplicities, then its bins that no edge uses any more.
 
     The bindings decode payloads by value. Match the full payload and target, consuming one
     occurrence per tracked directed edge; identical calls retain the other copy. Bins shared
@@ -231,7 +231,7 @@ def detach(grove, created) -> None:
             _, counts = outgoing.setdefault(id(source), (source, Counter()))
             counts[(id(target), json.dumps(payload, sort_keys=True))] += 1
         for key, chrom in ((a, payload["chrom1"]), (b, payload["chrom2"])):
-            if key.data.get("_sv_owned"):
+            if key.data.get("type") == "intergenic_region":  # only this layer makes bins
                 bins[id(key)] = (chrom, key)
 
     # The pinned API cannot remove a selected parallel edge from one source. Rebuild only
@@ -239,6 +239,9 @@ def detach(grove, created) -> None:
     for source, counts in outgoing.values():
         keep = []
         for target, payload in grove.get_edge_list(source):
+            if not payload or payload.get("rel") != "breakpoint_edge":  # another layer's edge
+                keep.append((target, payload))
+                continue
             match = (id(target), json.dumps(payload, sort_keys=True))
             if counts[match]:
                 counts[match] -= 1
