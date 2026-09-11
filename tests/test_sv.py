@@ -45,7 +45,7 @@ def test_translocation_joins_the_two_genes_with_positions_on_the_edge():
     assert m["svclass"] == "TRA" and m["sample"] == "S1"
     assert (m["chrom1"], m["pos1"], m["strand1"]) == ("chr1", 1500, "+")
     assert (m["chrom2"], m["pos2"], m["strand2"]) == ("chr2", 5500, "-")
-    assert created == [("edge", a, b)]                    # nothing inserted: genes are the anchors
+    assert created == [("edge", a, b, m)]                    # nothing inserted: genes are the anchors
 
 
 def test_breakend_inside_overlapping_genes_anchors_to_each():
@@ -216,3 +216,26 @@ def test_cohort_file_extracts_a_cohorts_samples_into_one_plain_table(tmp_path, m
     with pytest.raises(KeyError):
         sv.cohort_file("NOPE-XX")
 
+
+
+@pytest.mark.parametrize("order", [(0, 1), (1, 0)])
+@pytest.mark.parametrize("partner", [3500, 5_500_000, 1500])
+@pytest.mark.parametrize("identical", [False, True])
+def test_additive_attachments_detach_independently(order, partner, identical):
+    g = pg.Grove()
+    a = g.insert("chr1", pg.GenomicCoordinate("+", 1000, 2000), {"type": "gene"})
+    b = g.insert("chr1", pg.GenomicCoordinate("+", 3000, 4000), {"type": "gene"})
+    g.add_edge(a, b, {"rel": "other_layer"})
+    baseline = (g.size(), g.edge_count())
+    attachments = []
+    samples = ["S1", "S1" if identical else "S2"]
+    for sample in samples:
+        _, created = sv.attach_tracked(g, [_sv(sample, "SV1", "chr1", 1500, "+",
+                                              "chr1", partner, "-", "DEL", cohort=sample)])
+        attachments.append(created)
+    sv.detach(g, attachments[order[0]])
+    assert [m["sample"] for _, m in _bp_edges(g, a)] == [samples[order[1]]]
+    assert any(m == {"rel": "other_layer"} for _, m in g.get_edge_list(a))
+    sv.detach(g, attachments[order[1]])
+    assert (g.size(), g.edge_count()) == baseline
+    assert g.get_edge_list(a) == [(b, {"rel": "other_layer"})]
