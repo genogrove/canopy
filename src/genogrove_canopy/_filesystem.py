@@ -10,6 +10,8 @@ def restrict_filesystem(roots):
     import sys
 
     if sys.platform == "darwin":
+        # sandbox_init is deprecated by Apple but still functional and has no public
+        # replacement for a per-process profile; the deprecation is knowingly accepted.
         lib = ctypes.CDLL("/usr/lib/libsandbox.dylib", use_errno=True)
         lib.sandbox_init.argtypes = [ctypes.c_char_p, ctypes.c_uint64,
                                      ctypes.POINTER(ctypes.c_char_p)]

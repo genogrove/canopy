@@ -475,6 +475,7 @@ except Exception as _error:
     _sys.__stdout__.buffer.flush()
     raise SystemExit(1)
 """)
+    assert bootstrap != _BOOTSTRAP, "restrict_filesystem call not found in the bootstrap"
     ready = """_message = _json.dumps({"ready": True}).encode("utf-8")
 _sys.__stdout__.buffer.write(_struct.pack(">I", len(_message)) + _message)
 _sys.__stdout__.buffer.flush()

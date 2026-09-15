@@ -33,6 +33,9 @@ def test_python_io_cannot_read_or_truncate_ungranted_file(execute, api):
     assert result.returncode == 0 and "READ" in result.stdout, result
     result = run(f"import io\n{api}({str(data)!r}, 'w').close()")
     assert result.returncode != 0 and data.read_text() == "READ"
+    # a granted directory is read-only too: no new files inside it
+    result = run(f"import io\n{api}({str(allowed / 'new')!r}, 'w').close()")
+    assert result.returncode != 0 and not (allowed / "new").exists()
 
 
 def test_symlink_does_not_extend_granted_directory(execute):
