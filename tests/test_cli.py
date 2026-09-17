@@ -63,14 +63,20 @@ def test_answer_wires_the_declared_layers_for_the_resolved_cohort(monkeypatch, t
     scripts = []
 
     class _R:
+        truncated = False
         returncode, timed_out, stdout, stderr = 0, False, "ok: 1", ""
     args = type("A", (), {"model": "m", "show_code": False, "cohort": None, "format": "tsv"})()
-    out, err, *_ = cli._answer("SVs near MYC in BRCA-US?", system_prompt="", base="", gg="/x.gg",
+    from genogrove_canopy import preamble
+    base = preamble.build("/x.gg")                    # the real base, as _grove_context hands it over
+    _out, err, *_ = cli._answer("SVs near MYC in BRCA-US?", system_prompt="", base=base, gg="/x.gg",
                                args=args, execute=lambda s: scripts.append(s) or _R())
     assert err == "" and len(scripts) == 1
     script = scripts[0]
     assert "def attach_tracked(" in script and f'["BRCA-US", "{table}"]' in script
     assert 'SV_COHORTS = ["BRCA-US"]' in script and "COHORTS = []" in script
+    # exactly one preamble: the base one evicts the worker memo, so it must not precede the
+    # cohort one (that concatenation is what silently disabled the warm grove)
+    assert script.count("GROVE = ") == 1 and "globals().pop('_CANOPY_STATE', None)" not in script
 
 
 def test_sv_question_without_a_cohort_gets_no_default(monkeypatch):
@@ -119,3 +125,32 @@ def test_bridge_table_keys_exist_in_both_catalogs():
     # the plain tissue word means the tissue biosample where rE2G has one; the disease word the line
     assert cli._resolve_cohorts(["liver"])["liver"]["re2g"] == ["UBERON:0002107"]
     assert cli._resolve_cohorts(["HCC"])["liver cancer"]["re2g"] == ["EFO:0001187"]
+
+
+@pytest.mark.parametrize("spec", ["", " ", "\t"])
+def test_empty_explicit_cohort_is_rejected(spec):
+    from genogrove_canopy.cli import _resolve_cohorts
+    with pytest.raises(SystemExit, match="empty cohort"):
+        _resolve_cohorts([spec])
+
+
+def test_every_catalogue_name_resolves_to_its_own_biosample():
+    from genogrove_canopy import cli, resources
+    for cohort in resources.re2g_cohorts():
+        result = cli._resolve_cohorts([" " + cohort["name"].swapcase() + " "])
+        assert cli._cohort_ids(result) == [cohort["ontology_id"]], cohort["name"]
+
+
+def test_bridge_words_that_are_biosample_names_name_that_biosample_and_keep_svs():
+    """Exact biosample names win over the bridge. So a bridge term or alias that is ALSO an rE2G
+    biosample name must point at that very biosample — otherwise the word resolves to the
+    biosample, the bridge row is bypassed, and its PCAWG cohorts are silently lost (this was
+    `lung`, `pancreas` and `RCC`)."""
+    from genogrove_canopy import cli, resources
+
+    names = {c["name"].strip().lower(): c["ontology_id"] for c in resources.re2g_cohorts()}
+    for r in cli._bridge():
+        for w in [r["term"], *r["aliases"]]:
+            if w.lower() in names:
+                assert r["re2g"] == [names[w.lower()]], f"{w!r}: bridge row names another biosample"
+                assert cli._pcawg_codes(cli._resolve_cohorts([w])) == r["pcawg"], w

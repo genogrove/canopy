@@ -97,6 +97,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#5](https://github.com/genogrove/canopy/pull/5)).
 
 ### Changed
+- **SV answers are one row per SV, both breakpoints spelled out**: the prompt's SV section and
+  worked example emit `bp1`/`bp2` with the gene(s) containing each (or `intergenic`), the span
+  between the breakpoints as the row interval when both are on one chromosome (with `size` as
+  their distance), the gene-side breakpoint otherwise; a 1 Mb anchor bin is never reported; an
+  SV with both ends inside the gene is intragenic, not a join; the anchor line says how many SVs
+  join the gene to another gene and when none do
+  ([#31](https://github.com/genogrove/canopy/pull/31)).
 - **Per-stage progress for a question**: a query used to print nothing between the prompt and the
   answer, so a slow LLM call, a slow rE2G lookup and a slow grove query were indistinguishable. Each
   stage now logs with its own timing, and the enhancer line names what it looked up and in which
@@ -134,6 +141,29 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#6](https://github.com/genogrove/canopy/pull/6)).
 
 ### Fixed
+- **`sv.detach` removes exactly its own attachment**: it used to drop the first edge between a
+  pair and every bin it had created, so with cohorts accumulating on one grove a detach could
+  take another attachment's edge or a bin another attachment still used. It now consumes the
+  tracked (target, payload) multiplicities per source, keeps every other edge in order, and
+  removes a bin only when no edge uses it. Tracked edge entries carry their payload
+  (`("edge", a, b, payload)`). The `api-surface` CI job now runs on any `src/` or `tests/` change
+  ([#35](https://github.com/genogrove/canopy/pull/35)).
+- **Warm layer reuse works in production**: the CLI and web adapters ran the base preamble
+  (which evicts the worker memo) in front of the cohort preamble, so every enhancer or SV
+  question re-deserialized the grove and re-attached its cohorts. They now select one preamble,
+  and cohorts accumulate across questions as designed
+  ([#34](https://github.com/genogrove/canopy/pull/34)).
+- **Truncated or failed sandbox output is never rendered as an answer**: the CLI and the web UI
+  share one validator — a non-zero exit or timeout reports the traceback, output cut at the
+  sandbox cap is refused as incomplete rather than parsed into a partial table (a cut JSON line
+  used to become summary text), and a failure that also overflowed still shows its traceback
+  first ([#33](https://github.com/genogrove/canopy/pull/33)).
+- **Exact cohort selections are preserved**: an exact rE2G biosample name now wins over the
+  substring match (`lung` used to lose to the more-replicated `left lung`), an empty `--cohort`
+  is rejected instead of matching everything, and the web picker submits ontology ids. Bridge
+  rows that share a word with a biosample now name that biosample (`lung`, `pancreas`; `RCC`
+  gets a `kidney cancer` row on the RCC line), guarded by a test, so those words keep their
+  PCAWG cohorts ([#32](https://github.com/genogrove/canopy/pull/32)).
 - **The enhancer layer now works on any machine, and is pinned**: `fetch_for_targets` skipped any
   cohort whose index was absent, and nothing ever fetched one — so enhancer questions silently
   returned zero links everywhere except the machine that had built the 3 GB bundle locally. All

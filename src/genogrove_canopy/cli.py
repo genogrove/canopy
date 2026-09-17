@@ -119,8 +119,9 @@ def _resolve_cohorts(specs):
     ``{label: {"re2g": [ontology ids], "pcawg": [project codes]}}``.
 
     Each spec resolves, in order, as: a layer key as written (an rE2G ontology id, a PCAWG
-    project code); a bridge term or alias (``data/cohorts.tsv`` — one tissue word gives both
-    layers' keys, which is what lets one ``COHORT:`` line drive enhancers *and* SVs); or a
+    project code); an exact rE2G biosample name (a bridge row for the same word adds its PCAWG
+    codes); a bridge term or alias (``data/cohorts.tsv`` — one tissue word gives both layers'
+    keys, which is what lets one ``COHORT:`` line drive enhancers *and* SVs); or a
     case-insensitive substring of an rE2G biosample name (most-replicated match wins). Raises
     ``SystemExit`` with a pointer to ``--list-cohorts`` on no match.
     """
@@ -129,6 +130,8 @@ def _resolve_cohorts(specs):
     chosen = {}
     for spec in specs:
         s = spec.strip().lower()
+        if not s:
+            raise SystemExit("canopy: empty cohort — see --list-cohorts")
         hit = next((c for c in catalog if c["ontology_id"].lower() == s), None)
         if hit:
             chosen[hit["name"]] = {"re2g": [hit["ontology_id"]], "pcawg": []}
@@ -136,7 +139,12 @@ def _resolve_cohorts(specs):
         if spec.strip().upper() in pcawg:
             chosen[spec.strip().upper()] = {"re2g": [], "pcawg": [spec.strip().upper()]}
             continue
+        exact = next((c for c in catalog if c["name"].strip().lower() == s), None)
         row = next((r for r in _bridge() if s == r["term"] or s in (a.lower() for a in r["aliases"])), None)
+        if exact:  # a bridge row for the same word names this very biosample (tested), so its
+            chosen[exact["name"]] = {"re2g": [exact["ontology_id"]],  # PCAWG codes come along
+                                     "pcawg": row["pcawg"] if row else []}
+            continue
         if row:
             chosen[row["term"]] = {"re2g": row["re2g"], "pcawg": row["pcawg"]}
             continue
@@ -172,9 +180,11 @@ def _grove_context():
     the ENCODE cCRE registry, built into the pinned artifact rather than baked on first run (see
     ``resources.ensure_all_grove``). The preamble binds ``GROVE`` to an open ``GroveView`` of it,
     so one `intersect` returns genes *and* cCREs. The enhancer layer is **not** in the artifact
-    (it is cohort-specific): when the model declares ``COHORT``/``LAYERS``, ``_answer`` appends
-    ``preamble.build(gg, cohort_links)``, which rebinds ``GROVE`` to a mutable copy with that
-    cohort's nodes and edges attached — same name, so generated code never opens a path itself.
+    (it is cohort-specific): when the model declares ``COHORT``/``LAYERS``, ``_answer`` runs
+    ``preamble.build(gg, cohort_links, sv_files)`` **instead of** this base preamble — the two
+    are exclusive, never concatenated: the base one evicts ``_CANOPY_STATE`` from the query's
+    namespace, the cohort one memoises the attached grove in it. Both bind ``GROVE``, so
+    generated code never opens a path itself.
     """
     from genogrove_canopy import layers
     from genogrove_canopy.layers import enhancers, sv
@@ -469,10 +479,11 @@ def _answer(question, *, system_prompt, base, gg, args, execute):
     # generated code forgets the import (it's already in the allowlist).
     log.say("Running the query over the grove")
     t1 = time.perf_counter()
-    result = execute("import json\n" + base + enh_pre + code)
+    result = execute("import json\n" + (enh_pre or base) + code)
     exec_s = time.perf_counter() - t1
-    if result.returncode != 0 or result.timed_out:
-        return "", (result.stderr.strip() or "(the generated code failed with no output)"), gen_s, enh_s, exec_s
+    error = sandbox.result_error(result)
+    if error:
+        return "", error, gen_s, enh_s, exec_s
     rendered = _render(result.stdout, args.format)
     if not rendered.strip():
         return "", "(the generated code produced no output)", gen_s, enh_s, exec_s
