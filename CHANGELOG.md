@@ -141,6 +141,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#6](https://github.com/genogrove/canopy/pull/6)).
 
 ### Fixed
+- **Dataset filesystem grants are enforced by the OS**: generated code could read ungranted
+  files through `io.open` and native readers, and truncate existing files despite
+  `RLIMIT_FSIZE=0`. The sandbox now installs a filesystem policy — macOS Seatbelt or Linux
+  Landlock (ABI 3+, x86-64/aarch64) — after the trusted imports and before any generated code,
+  in both the one-shot and warm-worker modes; it denies reads outside the granted roots and
+  every write, creation, deletion and truncation, for Python and native bindings alike, and
+  closes symlink escapes. A Python audit hook keeps the error messages consistent for cached
+  I/O entry points. Startup fails explicitly when the policy cannot be installed (no
+  Python-only fallback; the worker reports it through a ready/error frame), and the hosts
+  create the layer directories before the worker starts so Landlock can grant them
+  ([#36](https://github.com/genogrove/canopy/pull/36)).
 - **`sv.detach` removes exactly its own attachment**: it used to drop the first edge between a
   pair and every bin it had created, so with cohorts accumulating on one grove a detach could
   take another attachment's edge or a bin another attachment still used. It now consumes the

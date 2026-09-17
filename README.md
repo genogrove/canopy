@@ -141,7 +141,13 @@ Given the same question and the same catalog, a run reproduces.
 
 The generated code is untrusted, so it never runs in-process: `sandbox.py` executes it
 in a separate process with the network blocked, imports allowlisted, filesystem reads
-restricted to pinned dataset paths, and wall-clock, memory and output caps enforced.
+restricted to pinned dataset paths, and wall-clock and output limits. Filesystem
+restrictions cover Python and native readers through macOS Seatbelt or Linux
+Landlock (ABI 3+, on x86-64/aarch64). Execution stops if OS isolation cannot be
+installed; older Linux kernels and other platforms are unsupported. Dataset files
+are read-only, including protection against truncation and symlink escapes. Memory
+limits are best effort and unavailable on macOS. Network restrictions remain Python
+import guards; this is not a container for deliberately hostile code.
 
 Dependency direction is one-way — `canopy → pygenogrove` — so `pip install pygenogrove`
 never drags in an LLM SDK.
