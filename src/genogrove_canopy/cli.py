@@ -327,6 +327,8 @@ def _cell(value) -> str:
         return " ".join(parts)
     if isinstance(value, list) and not value:
         return "-"  # an empty list is a finding (no cCRE overlap), not a missing value
+    if value is None:
+        return "."  # a null field, in the BED/VCF missing-value convention (#37)
     return str(value)
 
 
@@ -337,7 +339,8 @@ def _format_records(records: list[dict], fmt: str) -> str:
     if fmt in ("text", "tsv"):
         if fmt == "tsv":
             rows = ["\t".join(cols)]
-            rows += ["\t".join(str(r.get(c, "")) for c in cols) for r in records]
+            rows += ["\t".join("." if v is None else str(v)  # null → "." (#37)
+                               for v in (r.get(c, "") for c in cols)) for r in records]
             return "\n".join(rows)
         # text: an aligned table for a human to read. Two things keep it readable that the
         # machine formats deliberately skip — see `_constant_columns` and `_cell`.

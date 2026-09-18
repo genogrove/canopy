@@ -31,6 +31,16 @@ def test_render_tsv_and_json():
     assert json.loads(_render(_REC, "json").strip())["name"] == "EGFR"  # grove-native, unconverted
 
 
+def test_render_null_field_as_dot_not_python_none():
+    """A null (e.g. a translocation's `size`) is `.` in tsv and text, never the literal `None`;
+    json keeps `null` (#37)."""
+    rec = '{"chrom": "chr8", "start": 1, "end": 1, "name": "x", "size": null}'
+    for fmt in ("tsv", "text"):
+        out = _render(rec, fmt)
+        assert "None" not in out and out.rstrip().endswith(".")
+    assert json.loads(_render(rec, "json").strip())["size"] is None
+
+
 def test_render_scalar_passes_through():
     assert _render("count: 42", "bed").strip() == "count: 42"
 
