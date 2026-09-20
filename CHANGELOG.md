@@ -141,6 +141,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#6](https://github.com/genogrove/canopy/pull/6)).
 
 ### Fixed
+- **A null record field renders as `.`, not Python's `None`**: a `null` value (a translocation's
+  `size`, a null `score`/`strand`) printed as the literal `None` in the text table, `--format tsv`
+  and `--format bed` (a malformed BED line). All three now print `.`, the BED/VCF missing-value
+  convention; `--format json` keeps `null`
+  ([#37](https://github.com/genogrove/canopy/issues/37), [#39](https://github.com/genogrove/canopy/pull/39)).
 - **Dataset filesystem grants are enforced by the OS**: generated code could read ungranted
   files through `io.open` and native readers, and truncate existing files despite
   `RLIMIT_FSIZE=0`. The sandbox now installs a filesystem policy — macOS Seatbelt or Linux

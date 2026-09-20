@@ -339,8 +339,9 @@ def _format_records(records: list[dict], fmt: str) -> str:
     if fmt in ("text", "tsv"):
         if fmt == "tsv":
             rows = ["\t".join(cols)]
-            rows += ["\t".join("." if v is None else str(v)  # null → "." (#37)
-                               for v in (r.get(c, "") for c in cols)) for r in records]
+            # null → "." (#37); an absent key stays "" (unset, not set-to-null)
+            rows += ["\t".join("." if r.get(c, "") is None else str(r.get(c, "")) for c in cols)
+                     for r in records]
             return "\n".join(rows)
         # text: an aligned table for a human to read. Two things keep it readable that the
         # machine formats deliberately skip — see `_constant_columns` and `_cell`.
@@ -363,8 +364,9 @@ def _format_records(records: list[dict], fmt: str) -> str:
             continue
         rows.append("\t".join(str(v) for v in (
             r.get("chrom", "."), r["start"], int(r["end"]) + 1,
-            r.get("name") or r.get("id") or ".", r.get("score", "."),
-            r.get("strand", "."),
+            r.get("name") or r.get("id") or ".",
+            "." if r.get("score") is None else r["score"],    # absent or null → "." (#37)
+            "." if r.get("strand") is None else r["strand"],
         )))
     return "\n".join(rows)
 

@@ -39,6 +39,10 @@ def test_render_null_field_as_dot_not_python_none():
         out = _render(rec, fmt)
         assert "None" not in out and out.rstrip().endswith(".")
     assert json.loads(_render(rec, "json").strip())["size"] is None
+    # bed: an explicit null score/strand is "." like an absent one, never a malformed "None"
+    assert _render(rec.replace('"size": null', '"score": null, "strand": null'), "bed").strip().endswith("x\t.\t.")
+    # text: a column that is null in every row collapses to `size=.` above the table
+    assert "size=." in _render("\n".join([rec] * 3), "text")
 
 
 def test_render_scalar_passes_through():
