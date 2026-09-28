@@ -295,3 +295,47 @@ def test_warm_worker_grows_by_sv_cohort_and_sv_cohorts_scopes_each_question(tmp_
     assert "all ['X-US'] mine ['X-US']" in first.stdout
     assert second.returncode == 0, second.stderr
     assert "all ['X-US', 'Y-US'] mine ['Y-US']" in second.stdout   # grew, and scoped to Y
+
+
+def test_hichip_worked_example_merges_by_partner_window_and_counts_tumours(tmp_path):
+    """The prompt's HiChIP worked example, run as shipped: windows are inserted by the preamble,
+    a partner reached from both of MYC's windows is one row, tumours are counted not edges, an
+    intragenic partner is kept and flagged, and a desert partner is 'intergenic'."""
+    import json
+    import re
+    from pathlib import Path
+
+    from genogrove_canopy.layers import hichip
+
+    md = (Path(hichip.__file__).parents[1] / "prompts" / "system.md").read_text()
+    m = re.search(r"### Chromatin contacts \(HiChIP\).*?COHORT: breast\nLAYERS: hichip\n\n```python\n(.*?)```", md, re.S)
+    assert m, "HiChIP worked example not found in system.md"
+
+    g = pg.Grove(order=100)
+    g.insert("chr8", pg.GenomicCoordinate("+", 127_735_433, 127_742_951), {"type": "gene", "id": "ENSG00000136997.20", "name": "MYC"})
+    g.insert("chr8", pg.GenomicCoordinate("-", 127_890_000, 127_900_000), {"type": "gene", "id": "ENSG1", "name": "PVT1"})
+    g.insert("chr8", pg.GenomicCoordinate(".", 127_895_000, 127_895_300), {"type": "regulatory_region", "id": "EH1", "class": "dELS"})
+    gg = tmp_path / "myc.gg"
+    g.serialize(str(gg))
+    loop = lambda s, a, b: f"chr8\t{a}\t{a + 10_000}\tchr8\t{b}\t{b + 10_000}\t9\t0.01\t1\t0\t{s}\tTCGA-BRCA\n"
+    table = tmp_path / "TCGA-BRCA.tsv"
+    table.write_text("\t".join(hichip._FIELDS) + "\n"
+                     + loop("S1", 127_730_000, 127_890_000)      # MYC window 1 -> PVT1 window
+                     + loop("S2", 127_730_000, 127_890_000)      # same loop, second tumour
+                     + loop("S1", 127_740_000, 127_890_000)      # MYC window 2 -> same partner: merged
+                     + loop("S1", 127_730_000, 127_740_000)      # both windows over MYC: intragenic
+                     + loop("S3", 127_730_000, 128_100_000))     # partner in a gene desert
+    code = "import json\n" + preamble.build(str(gg), None, None, {"TCGA-BRCA": str(table)}) + m.group(1)
+    result = sandbox.run(code, data_paths=[str(tmp_path)], extra_syspath=[_pygenogrove_site_dir()])
+
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert lines[0] == "MYC contacts in TCGA-BRCA (4 partner windows in 3 tumours):"
+    rows = [json.loads(ln) for ln in lines[1:]]
+    assert [(r["start"], r["name"], r["n_samples"], r["intragenic"]) for r in rows] == [
+        (127_890_000, "loop:MYC~PVT1", 2, False),   # most tumours first; one row for two MYC windows
+        (127_740_000, "loop:MYC~MYC", 1, True),     # then by distance; the intragenic loop is seen
+        (127_730_000, "loop:MYC~MYC", 1, True),     # from each of MYC's windows
+        (128_100_000, "loop:MYC~intergenic", 1, False)]
+    assert rows[0]["samples"] == ["S1", "S2"] and rows[0]["ccre_classes"] == ["dELS"] and rows[0]["n_ccre"] == 1
+    assert all(r["type"] == "contact" and r["end"] == r["start"] + 9_999 and r["chrom"] == "chr8" for r in rows)

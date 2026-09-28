@@ -281,6 +281,30 @@ RESOURCES: dict[str, Resource] = {
         filename="pcawg_sample_sheet.tsv",
         description="PCAWG sample sheet (aliquot -> donor, specimen, ICGC project code).",
     ),
+    # TCGA H3K27ac HiChIP (Chang lab, Nat Genet 2025, doi:10.1038/s41588-025-02188-0): 69
+    # primary tumours, 15 cancer types, FitHiChIP loops at q <= 0.1 on 10 kb bins, GRCh38
+    # (verified: no liftover). GDC open-access publication files, addressed by UUID
+    # (https://gdc.cancer.gov/about-data/publications/TCGA-HiChIP-2024). The two ORIGINALS below
+    # are build inputs for `tools/build_hichip_cohorts.py`, never read at query time; the GDC
+    # page carries an "under review" banner, so immutability rests on the sha256 here. The
+    # per-project tables that script derives are what gets re-hosted and pinned for the
+    # `hichip` layer (issue #40).
+    "tcga.hichip.metadata": Resource(
+        name="tcga.hichip.metadata",
+        url="https://api.gdc.cancer.gov/data/2188fa64-dc1f-4609-9ec8-c249b1121861",
+        sha256="55a6f19100469af2aeb9f9a0794d2a52d74b1e179fe9917eda632ece88b66f3c",
+        filename="TCGA_HiChIP_metadata.txt",
+        description="TCGA HiChIP file manifest: file -> TCGA project, case, aliquot (md5 "
+                    "87d5228fccafd5e42776a7743ef58791 on the GDC page).",
+    ),
+    "tcga.hichip.loops.raw": Resource(
+        name="tcga.hichip.loops.raw",
+        url="https://api.gdc.cancer.gov/data/0846083d-dd59-47fc-b005-d7fb34ecabd1",
+        sha256="0dd4e983017d8e44f184501c5b14c82338ab22a66530d213911607b6485f111a",
+        filename="TCGA_HiChIP_FitHiChIP_loop_calls.tar.gz",
+        description="TCGA HiChIP per-sample FitHiChIP loop calls (q <= 0.1, 10 kb bins), 69 "
+                    "samples, 523 MB (md5 0402bacfca84bbbb6e2c963cf368db4b on the GDC page).",
+    ),
 }
 
 
@@ -734,6 +758,23 @@ def pcawg_cohorts() -> list[dict]:
     for r in rows:
         r["n_samples"], r["n_svs"] = int(r["n_samples"]), int(r["n_svs"])
         r["aliquot_ids"] = r["aliquot_ids"].split(",")
+    return rows
+
+
+_HICHIP_COHORTS = Path(__file__).parent / "data" / "hichip_cohorts.tsv"
+
+
+@lru_cache(maxsize=1)
+def hichip_cohorts() -> list[dict]:
+    """The 15 TCGA HiChIP cohorts (TCGA project ids) from the packaged catalog, written by
+    ``tools/build_hichip_cohorts.py`` from the pinned GDC originals: one dict per project with
+    ``n_samples`` and ``n_loops`` (ints)."""
+    import csv
+
+    with _HICHIP_COHORTS.open(newline="") as fh:
+        rows = list(csv.DictReader(fh, delimiter="\t"))
+    for r in rows:
+        r["n_samples"], r["n_loops"] = int(r["n_samples"]), int(r["n_loops"])
     return rows
 
 

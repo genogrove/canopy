@@ -7,6 +7,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Chromatin-contact layer (TCGA H3K27ac HiChIP)**: `layers/hichip.py` attaches one
+  `contact_edge` per loop per tumour between two 10 kb windows — FitHiChIP's anchors are a fixed
+  genome-wide grid (every anchor 10 kb, grid-aligned, no two overlap; 225,391 distinct windows
+  across the 69 tumours), so each window is one *indexed* `hichip_anchor` node inserted on
+  demand at first mention and shared across cohorts, never part of the pinned artifact. No
+  overlap edges: gene → windows and window → genes/cCREs are both spatial queries (stored
+  overlap edges measured ~17 per window, nearly all to cCREs). `attach_tracked`/`detach` follow
+  the SV layer; `detach` removes edges and any window left edgeless. Declared with
+  `LAYERS: hichip`, resolved through the same cohort bridge (new `hichip` column: 14 terms map
+  to TCGA projects, plus a new `adrenal` term for TCGA-ACC), echoed as `HICHIP_COHORTS`; the
+  prompt gains a "Chromatin contacts" section whose worked example runs in the sandbox in CI.
+  Data: the GDC originals are pinned by UUID + sha256 (`tcga.hichip.metadata`,
+  `tcga.hichip.loops.raw`); `tools/build_hichip_cohorts.py` derives one table per TCGA project
+  (7.7M loops, 138 MB tarball) plus the packaged `data/hichip_cohorts.tsv`. Measured on the
+  pinned grove: KIRC 1.3 s, PRAD 2.2 s, LUSC (800k loops) 10.3 s to attach
+  ([#40](https://github.com/genogrove/canopy/issues/40)).
 - **SV layer reachable from a question, one cohort vocabulary for both layers**: the model
   declares `COHORT: <term>` and `LAYERS: enhancers; sv` (`LAYERS` replaces the unused-content
   `TARGETS`); the host resolves the term through a curated bridge (`data/cohorts.tsv`: a tissue
