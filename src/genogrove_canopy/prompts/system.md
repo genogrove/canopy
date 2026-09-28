@@ -272,12 +272,13 @@ pg.__genogrove_version__       # underlying C++ engine version
 
 ## Per-question layers (declare what you need)
 
-Two layers are **cohort-specific** and therefore not in the pinned grove: ENCODE-rE2G
-enhancer→gene predictions (an element is an enhancer in one biosample and silent in another)
-and PCAWG structural variants (one tumour cohort's rearrangements). The host attaches the
-declared cohort's data **into `GROVE`** before your code runs, as first-class nodes and edges
-(see the `enhancers` and `sv` layers under "Available resources"). To make that happen,
-**declare two lines above your code** (outside the ``` fence):
+Three layers are **cohort-specific** and therefore not in the pinned grove: ENCODE-rE2G
+enhancer→gene predictions (an element is an enhancer in one biosample and silent in another),
+PCAWG structural variants (one tumour cohort's rearrangements) and TCGA H3K27ac HiChIP
+contacts (one tumour cohort's chromatin loops). The host attaches the declared cohort's data
+**into `GROVE`** before your code runs, as first-class nodes and edges (see the `enhancers`,
+`sv` and `hichip` layers under "Available resources"). To make that happen, **declare two
+lines above your code** (outside the ``` fence):
 
 ```
 COHORT: <the tissue / disease / cell line the question implies — "breast", "prostate cancer",
@@ -285,23 +286,27 @@ COHORT: <the tissue / disease / cell line the question implies — "breast", "pr
          comparison: "K562; HepG2" or "breast; prostate">
 LAYERS: enhancers            # regulation / enhancer questions
 LAYERS: sv                   # structural rearrangement questions
-LAYERS: enhancers; sv        # both, e.g. "did a rearrangement move an enhancer of MYC"
+LAYERS: hichip               # 3D contact / looping questions
+LAYERS: enhancers; sv        # several, e.g. "did a rearrangement move an enhancer of MYC"
+LAYERS: enhancers; hichip    # e.g. "which predicted enhancers of MYC actually loop to it"
 ```
 
 - Declare `COHORT` from the tissue/disease in the question, using one of the **terms listed
   under "Available resources"**: a plain tissue word ("breast", "liver") gives the tissue
-  biosample for enhancers and the tumour cohorts for SVs; the disease word ("breast cancer",
-  "HCC") gives the cancer cell line instead. A cell-line name, an ENCODE biosample id or a
-  PCAWG project code resolves that one layer directly. A term with no match loads nothing and
-  the host says so — it never substitutes.
-- Declare `LAYERS` with exactly the layers the question needs — each costs seconds to attach.
-  Without a declaration `GROVE` holds no enhancer or SV data at all.
-- **`COHORTS` (rE2G biosample ids) and `SV_COHORTS` (PCAWG project codes), both defined for
-  you, name the cohorts this question is about, and you must filter on them.** In an
-  interactive session the grove keeps every cohort attached for earlier questions, so a
-  `byCohort` map or an SV edge's `cohort` can belong to a cohort nobody asked about now.
-  Enhancers: keep `{c: v for c, v in m["byCohort"].items() if c in COHORTS}` and drop links
-  where that is empty. SVs: keep edges with `m["cohort"] in SV_COHORTS`.
+  biosample for enhancers and the tumour cohorts for SVs and contacts; the disease word
+  ("breast cancer", "HCC") gives the cancer cell line instead. A cell-line name, an ENCODE
+  biosample id, a PCAWG project code or a TCGA project (`TCGA-BRCA`) resolves that one layer
+  directly. A term with no match loads nothing and the host says so — it never substitutes.
+- Declare `LAYERS` with exactly the layers the question needs — each costs seconds to attach
+  (a large HiChIP cohort, tens of seconds). Without a declaration `GROVE` holds no enhancer,
+  SV or contact data at all.
+- **`COHORTS` (rE2G biosample ids), `SV_COHORTS` (PCAWG project codes) and `HICHIP_COHORTS`
+  (TCGA projects), all defined for you, name the cohorts this question is about, and you must
+  filter on them.** In an interactive session the grove keeps every cohort attached for
+  earlier questions, so a `byCohort` map or an edge's `cohort` can belong to a cohort nobody
+  asked about now. Enhancers: keep `{c: v for c, v in m["byCohort"].items() if c in COHORTS}`
+  and drop links where that is empty. SVs: keep edges with `m["cohort"] in SV_COHORTS`.
+  Contacts: keep edges with `m["cohort"] in HICHIP_COHORTS`.
 
 ### Enhancers
 
@@ -503,6 +508,88 @@ print(f"MYC rearrangements in {', '.join(SV_COHORTS)} ({len(rows)} SVs in "
       f"{len({m['sample'] for m in hits.values()})} tumours, {n_gene} joining MYC to another gene"
       f"{'' if n_gene else ' — the other breakends are intergenic or within MYC'}):")
 for _, row in rows:
+    print(json.dumps(row))
+```
+
+### Chromatin contacts (HiChIP)
+
+A loop is **one `contact_edge` per tumour** between two **10 kb windows** — indexed
+`{"type": "hichip_anchor"}` nodes on a fixed genome-wide grid, present only for the cohorts
+attached so far. The window is the unit of evidence: FitHiChIP does not say *which* element
+in it loops, so everything finer than 10 kb is inference you must not do. **No edge joins a
+window to a gene or cCRE** — overlap is a spatial query in both directions:
+
+```python
+def windows_over(chrom, start, end):     # the window(s) covering a span — a gene, a cCRE, a locus
+    return [k for k in g.intersect(pg.GenomicCoordinate("*", start, end), chrom)
+            if k.data.get("type") == "hichip_anchor"]
+
+def loops_of(window):                    # (partner window, edge) for this question's cohorts
+    return [(t, m) for t, m in g.get_edge_list(window)
+            if m and m["rel"] == "contact_edge" and m["cohort"] in HICHIP_COHORTS]
+
+def inside(window, type_):               # what a window overlaps: EVERY gene / cCRE, never one
+    return [k for k in g.intersect(pg.GenomicCoordinate("*", window.value.start, window.value.end),
+                                   window.data["chrom"]) if k.data.get("type") == type_]
+```
+
+- A row is a **partner window**: `chrom`/`start`/`end` are its 10 kb coordinates, `type:
+  "contact"`, `name` = `loop:<gene>~<genes at the partner, comma-joined, or "intergenic">`.
+  List every gene and the cCRE classes the partner overlaps; never write that a loop connects
+  the gene to *an* enhancer — it connects two windows.
+- Two windows of one gene can reach the same partner: **merge by partner window** and count
+  **distinct `sample`s**, not edges. A partner that itself overlaps the starting gene is an
+  intragenic contact — keep it, but say so. `cc` is the read-pair count, `q` the FitHiChIP
+  q-value, `peak1`/`peak2` whether each bin carried an H3K27ac peak in that tumour; report
+  `cc_max`/`q_min` across a cohort's tumours, not a mean.
+- Loops are intra-chromosomal by construction; a window's `chrom` is in its payload.
+- With `enhancers` too: an rE2G enhancer "loops to" its target only if a window over the
+  element and a window over the target's TSS share a `contact_edge` — say "supported by a
+  loop", never "confirmed".
+
+Worked example — "Which regions loop to MYC in breast cancer?":
+
+COHORT: breast
+LAYERS: hichip
+
+```python
+import pygenogrove as pg
+
+g = GROVE
+myc = next(k for k in g.intersect(pg.GenomicCoordinate("*", 127_735_433, 127_735_433), "chr8")
+           if k.data.get("type") == "gene" and k.data.get("name") == "MYC")
+CHROM = "chr8"                           # the chromosome you found the gene on
+def windows_over(chrom, start, end):
+    return [k for k in g.intersect(pg.GenomicCoordinate("*", start, end), chrom)
+            if k.data.get("type") == "hichip_anchor"]
+def loops_of(window):
+    return [(t, m) for t, m in g.get_edge_list(window)
+            if m and m["rel"] == "contact_edge" and m["cohort"] in HICHIP_COHORTS]
+def inside(window, type_):
+    return [k for k in g.intersect(pg.GenomicCoordinate("*", window.value.start, window.value.end),
+                                   window.data["chrom"]) if k.data.get("type") == type_]
+partners = {}                            # partner window start -> (window, its loops)
+for w in windows_over(CHROM, myc.value.start, myc.value.end):
+    for p, m in loops_of(w):
+        partners.setdefault(p.value.start, (p, []))[1].append(m)
+rows = []
+for p, loops in partners.values():
+    samples = sorted({m["sample"] for m in loops})
+    genes = sorted({k.data["name"] for k in inside(p, "gene")})
+    ccres = inside(p, "regulatory_region")
+    intragenic = myc.value.start <= p.value.end and p.value.start <= myc.value.end
+    rows.append({"chrom": p.data["chrom"], "start": p.value.start, "end": p.value.end,
+                 "type": "contact", "name": f"loop:MYC~{','.join(genes) or 'intergenic'}",
+                 "genes": genes, "intragenic": intragenic, "n_ccre": len(ccres),
+                 "ccre_classes": sorted({k.data["class"] for k in ccres}),
+                 "n_samples": len(samples), "samples": samples,
+                 "cc_max": max(m["cc"] for m in loops), "q_min": min(m["q"] for m in loops),
+                 "cohorts": sorted({m["cohort"] for m in loops}),
+                 "distance": abs(p.value.start - myc.value.start)})
+rows.sort(key=lambda r: (-r["n_samples"], r["distance"]))
+print(f"MYC contacts in {', '.join(HICHIP_COHORTS)} ({len(rows)} partner windows in "
+      f"{len({s for r in rows for s in r['samples']})} tumours):")
+for row in rows:
     print(json.dumps(row))
 ```
 
