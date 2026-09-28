@@ -305,6 +305,23 @@ RESOURCES: dict[str, Resource] = {
         description="TCGA HiChIP per-sample FitHiChIP loop calls (q <= 0.1, 10 kb bins), 69 "
                     "samples, 523 MB (md5 0402bacfca84bbbb6e2c963cf368db4b on the GDC page).",
     ),
+    # The *derived* artifact the `hichip` layer reads at query time: one `<project>.tsv` per
+    # TCGA project (15 tables, 7,733,631 loops), written by `tools/build_hichip_cohorts.py` from
+    # the two originals above and re-hosted. No re-thresholding, no lifting; only FitHiChIP's
+    # per-bin QC columns are dropped. A rebuild reproduces the tables byte for byte but not the
+    # tarball (tar stores mtimes), so the pin is this upload, not "whatever the script writes".
+    "tcga.hichip.loops": Resource(
+        name="tcga.hichip.loops",
+        url=(
+            "https://huggingface.co/datasets/genogrove/canopy/resolve/"
+            "bd86028b2ddccf4ee3d69897fe98f54b770eb181"
+            "/layers/genomic/tcga-hichip/tcga_hichip_fithichip_loops_Q0.1.hg38.tgz"
+        ),
+        sha256="89ec8a9b61ef28d471035e6aa17d5a009c403db43b3df177126079f04ae7aaa0",
+        filename="tcga_hichip_fithichip_loops_Q0.1.hg38.tgz",
+        description="TCGA H3K27ac HiChIP FitHiChIP loops (q <= 0.1, 10 kb bins, GRCh38), one "
+                    "table per TCGA project, 69 tumours, 15 projects.",
+    ),
 }
 
 

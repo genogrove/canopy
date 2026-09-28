@@ -20,7 +20,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   prompt gains a "Chromatin contacts" section whose worked example runs in the sandbox in CI.
   Data: the GDC originals are pinned by UUID + sha256 (`tcga.hichip.metadata`,
   `tcga.hichip.loops.raw`); `tools/build_hichip_cohorts.py` derives one table per TCGA project
-  (7.7M loops, 138 MB tarball) plus the packaged `data/hichip_cohorts.tsv`. Measured on the
+  (7.7M loops, 138 MB tarball, re-hosted and pinned by commit + sha256 as `tcga.hichip.loops`)
+  plus the packaged `data/hichip_cohorts.tsv`. Measured on the
   pinned grove: KIRC 1.3 s, PRAD 2.2 s, LUSC (800k loops) 10.3 s to attach
   ([#40](https://github.com/genogrove/canopy/issues/40)).
 - **SV layer reachable from a question, one cohort vocabulary for both layers**: the model
