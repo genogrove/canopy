@@ -23,7 +23,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (7.7M loops, 138 MB tarball, re-hosted and pinned by commit + sha256 as `tcga.hichip.loops`)
   plus the packaged `data/hichip_cohorts.tsv`. Measured on the
   pinned grove: KIRC 1.3 s, PRAD 2.2 s, LUSC (800k loops) 10.3 s to attach
-  ([#40](https://github.com/genogrove/canopy/issues/40)).
+  ([#40](https://github.com/genogrove/canopy/issues/40),
+  [#41](https://github.com/genogrove/canopy/pull/41)).
 - **SV layer reachable from a question, one cohort vocabulary for both layers**: the model
   declares `COHORT: <term>` and `LAYERS: enhancers; sv` (`LAYERS` replaces the unused-content
   `TARGETS`); the host resolves the term through a curated bridge (`data/cohorts.tsv`: a tissue
