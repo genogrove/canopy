@@ -23,6 +23,11 @@ DEFAULT_MODEL = "claude-opus-4-8"
 #: call is the answer. Running out means abstain — the trace says what was tried.
 MAX_TURNS = 8
 
+#: How much of a tool's output the model reads: the first lines, then a count of the rest. The
+#: host keeps and renders the full output; the model needs the shape and a sample, not 256 KB
+#: of rows resent on every later turn.
+HEAD_LINES = 100
+
 _SYSTEM_MD = Path(__file__).with_name("prompts") / "system.md"
 
 #: The per-question layers the host knows how to attach (see `cli.Session.attach`).
@@ -122,10 +127,11 @@ def answer(question: str, system_prompt: str, tools, *, model: str = DEFAULT_MOD
     (``cli.Session``). Nothing is executed here.
 
     Returns ``(text, trace)``: ``text`` is the model's final reply, ``""`` if it ran out of
-    turns (abstain); ``trace`` is every tool call in order as ``{"tool", "input", "output"}`` —
-    the provenance of the answer. ``on_turn(entry)`` is called as each is made. ``on_usage``
-    receives each response's ``usage`` (cost accounting for a benchmark harness, not the
-    package). Raises ``RuntimeError`` if the model declines.
+    turns or was cut off by ``max_tokens`` (abstain); ``trace`` is every tool call in order as
+    ``{"tool", "input", "output"}`` — the provenance of the answer, with the full output; the
+    model itself reads at most :data:`HEAD_LINES` of each. ``on_turn(entry)`` is called as each
+    is made. ``on_usage`` receives each response's ``usage`` (cost accounting for a benchmark
+    harness, not the package). Raises ``RuntimeError`` if the model declines.
     """
     import anthropic  # lazy: keeps the module importable without the SDK/key
 
@@ -137,7 +143,8 @@ def answer(question: str, system_prompt: str, tools, *, model: str = DEFAULT_MOD
             model=model,
             max_tokens=16000,  # room for adaptive thinking + a program; non-streaming-safe
             thinking={"type": "adaptive"},
-            system=system_prompt,
+            # cached: the contract + catalogue is large and identical on every turn and question
+            system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
             tools=TOOLS,
             messages=messages,
         )
@@ -145,26 +152,39 @@ def answer(question: str, system_prompt: str, tools, *, model: str = DEFAULT_MOD
             on_usage(response.usage)
         if response.stop_reason == "refusal":
             raise RuntimeError("the model declined to answer this question")
+        if response.stop_reason == "max_tokens":  # cut mid-thought: a truncated reply is not an answer
+            return "", trace
         messages.append({"role": "assistant", "content": response.content})
         calls = [b for b in response.content if b.type == "tool_use"]
         if not calls:
             return "".join(b.text for b in response.content if b.type == "text").strip(), trace
         results = []
         for call in calls:
-            output = _dispatch(tools, call.name, call.input)
+            try:
+                output = _dispatch(tools, call.name, call.input)
+            except Exception as exc:  # a layer fetch failing, a bad file: the model gets to react
+                output = f"error: {type(exc).__name__}: {exc}"
             entry = {"tool": call.name, "input": call.input, "output": output}
             trace.append(entry)
             if on_turn is not None:
                 on_turn(entry)
-            results.append({"type": "tool_result", "tool_use_id": call.id, "content": output})
+            results.append({"type": "tool_result", "tool_use_id": call.id, "content": _head(output),
+                            "is_error": output.startswith("error:")})
         messages.append({"role": "user", "content": results})
     return "", trace
 
 
+def _head(text: str, lines: int = HEAD_LINES) -> str:
+    """The first ``lines`` of a tool output, with a count of what was left out."""
+    parts = text.splitlines()
+    if len(parts) <= lines:
+        return text
+    return "\n".join(parts[:lines]) + f"\n… {len(parts) - lines} more lines (the host keeps and renders them all)"
+
+
 def _dispatch(tools, name: str, args: dict) -> str:
     """Route one tool call to the host, normalising what a model may send: a fenced program, a
-    placeholder cohort, a layer the host doesn't have. A bad call is reported back to the model
-    as text, never raised — the model is the one that can fix it."""
+    placeholder cohort, a layer the host doesn't have."""
     if name in ("run", "build"):
         return getattr(tools, name)(_strip_code_fence(str(args.get("code", ""))))
     if name == "attach":

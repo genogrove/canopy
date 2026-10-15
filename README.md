@@ -152,7 +152,8 @@ of one API: `attach` a pinned cohort's layers into the grove, `build` its own re
 into it (`insert`/`add_edge` from a `--data` file), and `run` a `pygenogrove` program
 against it (`intersect`/`get_neighbors`, read-only). It reads what each run prints, runs
 again if the rows are not yet the answer, and replies in prose when they are; the rows of
-its last run are printed beneath the reply.
+its last run are printed beneath the reply (for `--format json|tsv|bed` the reply goes to
+stderr and stdout stays the rows).
 A hard cap on turns ends a question that does not converge. Every call and its result is
 kept as the trace (`--show-code` as it happens, `--trace FILE` as JSON), which is the
 provenance of the answer.

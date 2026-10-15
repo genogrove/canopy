@@ -32,6 +32,7 @@ from genogrove_canopy.cli import (
     _grove_context,
     _parse_output,
     _pygenogrove_site_dir,
+    _resolve_cohorts,
 )
 
 
@@ -48,6 +49,7 @@ class _Grove:
         self.gg = data_paths[0]
         self.system_prompt = llm.build_system_prompt(block)
         self.model = model
+        self.warm = bool(own)  # flips for good once a question builds into the grove
         self.worker = sandbox.Worker(
             data_paths=data_paths, extra_syspath=[_pygenogrove_site_dir()]
         )
@@ -85,15 +87,16 @@ def _pipeline(question: str, cohort: str, model: str, emit) -> dict:
     emit("step", "Asking the model")
     session = Session(gg=grove.gg, base=grove.preamble, execute=grove.worker.submit,
                       override=[cohort] if cohort else (), say=lambda m: emit("step", m),
-                      warm=bool(_Handler.data))
+                      warm=getattr(grove, "warm", False))
 
     def on_turn(entry) -> None:
         emit("step", {"run": "Running a program over the grove", "build": "Building own data into the grove"}
              .get(entry["tool"]) or "Attaching " + ", ".join(entry["input"].get("layers") or []))
     text, trace = llm.answer(question, grove.system_prompt, session, model=grove.model, on_turn=on_turn)
+    grove.warm = getattr(grove, "warm", False) or session.built
     if not text:
-        return {"error": f"no answer after {len(trace)} tool calls — the turn cap ({llm.MAX_TURNS}) was reached",
-                "trace": trace}
+        return {"error": f"no answer after {len(trace)} tool calls — the turn cap ({llm.MAX_TURNS}) "
+                         "was reached or the reply was cut off", "trace": trace}
     records, passthrough = _parse_output(session.stdout)
     return {"answer": text, "summary": passthrough, "records": records, "code": session.code,
             "trace": trace, "note": "; ".join(session.notes) or None}
@@ -151,6 +154,12 @@ class _Handler(BaseHTTPRequestHandler):
         if not question:
             self._send(400, json.dumps({"error": "empty question"}), "application/json")
             return
+        if cohort:  # a bad picker value must fail here, not inside the loop after turns were paid for
+            try:
+                _resolve_cohorts([cohort])
+            except SystemExit as exc:
+                self._send(400, json.dumps({"error": str(exc)}), "application/json")
+                return
 
         # Stream newline-delimited JSON: {t:"step"|"tick", msg} events as work progresses,
         # then a final {t:"done", result} (or {t:"error", msg}). HTTP/1.0 close-delimited —
@@ -486,20 +495,12 @@ function renderResult(question, data){
   if(anchor && (hasTx || hasExon)) main.appendChild(zoomBlock(records, anchor));
 
   if(data.trace && data.trace.length) main.appendChild(tracePanel(data.trace));
-  else if(data.code) main.appendChild(codePanel(data.code));
   if(records.length) main.appendChild(tableBlock(records));
   if(!plottable.length && !records.length && !summary.trim())
     { status.textContent = "(no result)"; }
 }
 
 function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
-
-function codePanel(code){
-  const d = document.createElement("details"); d.className="code";
-  const s = document.createElement("summary"); s.textContent="Generated pygenogrove code"; d.appendChild(s);
-  const pre = document.createElement("pre"); pre.textContent=code; d.appendChild(pre);
-  return d;
-}
 
 // ---- trace: every tool call the agent made, its input and what came back ----
 function tracePanel(trace){

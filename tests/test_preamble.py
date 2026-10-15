@@ -17,11 +17,11 @@ def test_preamble_no_cohorts_opens_lazily():
 
 
 def test_preamble_build_turn_hands_out_the_mutable_grove_and_warm_runs_keep_it():
-    """`build` binds GROVE to the memoised grove itself (no read-only view) with no cohorts
-    needed; a `warm` run afterwards takes the memo path with the view, so it sees what the
-    build inserted — the lazy `GroveView.open` would not."""
+    """`build` binds GROVE to the view over the memoised grove plus exactly the three writers,
+    with no cohorts needed; a `warm` run afterwards takes the memo path with the plain view, so
+    it sees what the build inserted — the lazy `GroveView.open` would not."""
     mut = preamble.build("/tmp/x.gg", mutable=True)
-    assert "GROVE = _grove\n" in mut and "_readonly(_grove)" not in mut and "_CANOPY_STATE" in mut
+    assert "GROVE = _readonly(_grove, ('insert', 'add_edge', 'add_external_key'))" in mut and "_CANOPY_STATE" in mut
     warm = preamble.build("/tmp/x.gg", warm=True)
     assert "GROVE = _readonly(_grove)" in warm and "GroveView.open" not in warm
     for pre in (mut, warm):

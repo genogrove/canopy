@@ -12,11 +12,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   data, `run(code)` for a read-only query — feeds every result back, and stops when the model
   replies without a tool call or reaches `MAX_TURNS` (8; the host then reports an abstain
   instead of a guess). The model reads the rows it printed and runs again on an error or an
-  unexpected result; the final reply is prose, with the last run's rows rendered beneath it.
+  unexpected result (the model reads the first 100 lines of each result; the trace keeps all);
+  the final reply is prose, with the last run's rows rendered beneath it — for `--format
+  json|tsv|bed` the prose goes to stderr so stdout stays parseable. A reply cut at
+  `max_tokens`, like the turn cap, is an abstain.
   The `COHORT:` / `LAYERS:` declaration lines are gone: `attach` is the declaration, and its
   result tells the model what `COHORTS` / `SV_COHORTS` / `HICHIP_COHORTS` now hold. `build`
-  runs with `GROVE` bound to the session's mutable grove (`preamble.build(mutable=True)`) so
-  the agent can `insert`/`add_edge` the records of a `--data FILE` (CLI and `serve`,
+  runs with `GROVE` bound to a view over the session's grove that adds exactly `insert`,
+  `add_edge` and `add_external_key` (`preamble.build(mutable=True)`; no removal, no
+  `clear_graph`, so a build cannot damage the pinned layers) so the agent can put in the
+  records of a `--data FILE` (CLI and `serve`,
   repeatable; granted to the sandbox and named in the prompt) itself, tagged
   `"source": "own"`; what it builds persists in the warm grove like an attached cohort, and
   every later `run` in a session with own files takes the memoised grove (`warm=True`) so it

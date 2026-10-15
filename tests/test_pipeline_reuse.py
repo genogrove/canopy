@@ -78,6 +78,11 @@ def test_build_puts_own_data_into_the_warm_grove_for_later_runs(tmp_path):
         assert s1.build(build) == "built: 1\n"
         assert s1.run(probe) == '["A", "peak1"]\n'             # same session: warm view sees the peak
         assert s1.run("GROVE.insert('chr1', pg.GenomicCoordinate('*', 1, 2), {})\n").startswith("error:")
+        # a build may add, never take away: removal and clearing are off the handle
+        err = s1.build("GROVE.clear_graph()\n")
+        assert err.startswith("error:") and "build allows insert, add_edge, add_external_key" in err
+        assert s1.build("GROVE.remove_key(next(iter(GROVE.intersect(pg.GenomicCoordinate('*', 1500, 1500), 'chr1'))))\n").startswith("error:")
+        assert s1.run(probe) == '["A", "peak1"]\n'
         # the next question's session: with own files given, it starts warm — the memo kept the peak
         s2 = cli.Session(gg=str(gg), base=base, execute=worker.submit, say=lambda m: None, warm=True)
         assert s2.run(probe) == '["A", "peak1"]\n'

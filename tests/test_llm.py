@@ -92,24 +92,28 @@ def test_dispatch_normalises_what_a_model_sends():
 
 
 def _scripted_client(monkeypatch, turns):
-    """Fake `anthropic.Anthropic` whose `messages.create` returns one scripted reply per call.
-    Each turn is a list of content blocks: ("text", s) or ("tool_use", name, input)."""
-    import anthropic
+    """A fake `anthropic` module (so this runs without the SDK, as the skeleton CI does) whose
+    `messages.create` returns one scripted reply per call. Each turn is a list of content
+    blocks, ("text", s) or ("tool_use", name, input); a turn ending in ("stop", reason) sets
+    that stop reason."""
+    import sys
     from types import SimpleNamespace as NS
 
     seen = []
 
     def create(**kw):
         seen.append(kw)
-        blocks = []
+        blocks, stop = [], "end_turn"
         for i, b in enumerate(turns.pop(0)):
             if b[0] == "text":
                 blocks.append(NS(type="text", text=b[1]))
+            elif b[0] == "stop":
+                stop = b[1]
             else:
                 blocks.append(NS(type="tool_use", id=f"t{len(seen)}_{i}", name=b[1], input=b[2]))
-        return NS(content=blocks, stop_reason="end_turn", usage=None)
+        return NS(content=blocks, stop_reason=stop, usage=None)
 
-    monkeypatch.setattr(anthropic, "Anthropic", lambda: NS(messages=NS(create=create)))
+    monkeypatch.setitem(sys.modules, "anthropic", NS(Anthropic=lambda: NS(messages=NS(create=create))))
     return seen
 
 
@@ -128,15 +132,40 @@ def test_answer_loops_until_the_model_replies_without_a_tool(monkeypatch):
     assert text == "One rearrangement."
     assert [t["tool"] for t in trace] == ["attach", "run", "run"]
     assert trace[1]["output"].startswith("error:") and trace[2]["output"] == "count: 1\n"
-    # the second request carries the first turn's results back, one per call, by id
+    # the second request carries the first turn's results back, one per call, by id, errors flagged
     results = seen[1]["messages"][2]["content"]
     assert [r["type"] for r in results] == ["tool_result", "tool_result"]
-    assert results[1]["content"].startswith("error:")
-    assert seen[0]["tools"] is llm.TOOLS and seen[0]["system"] == "sys"
+    assert results[1]["content"].startswith("error:") and results[1]["is_error"] and not results[0]["is_error"]
+    assert seen[0]["tools"] is llm.TOOLS
+    assert seen[0]["system"][0]["text"] == "sys" and seen[0]["system"][0]["cache_control"]
 
 
-def test_answer_abstains_at_the_turn_cap(monkeypatch):
-    """A model that never stops calling tools gets cut off: empty text, the trace intact."""
+def test_answer_abstains_at_the_turn_cap_or_a_cut_reply(monkeypatch):
+    """A model that never stops calling tools gets cut off: empty text, the trace intact. A
+    reply the API cut at max_tokens is not an answer either — abstain, don't return a stub."""
     _scripted_client(monkeypatch, [[("tool_use", "run", {"code": "ok()\n"})]] * 3)
     text, trace = llm.answer("q", "sys", _Tools(), model="m", max_turns=3)
     assert text == "" and len(trace) == 3
+    _scripted_client(monkeypatch, [[("text", "The answer is EG"), ("stop", "max_tokens")]])
+    assert llm.answer("q", "sys", _Tools(), model="m") == ("", [])
+
+
+def test_tool_exceptions_become_error_results_and_long_outputs_are_cut_for_the_model(monkeypatch):
+    """A handler that raises (a layer download failing) must not abort the loop and lose the
+    trace: the model gets `error: …` and reacts. And the model reads only the head of a long
+    output; the trace keeps all of it."""
+    class _Broken(_Tools):
+        def attach(self, layers, cohort=""):
+            raise OSError("download failed")
+
+        def run(self, code):
+            return "\n".join(f'{{"i": {i}}}' for i in range(300))
+    seen = _scripted_client(monkeypatch, [
+        [("tool_use", "attach", {"layers": ["sv"]}), ("tool_use", "run", {"code": "x"})],
+        [("text", "ok")],
+    ])
+    text, trace = llm.answer("q", "sys", _Broken(), model="m")
+    assert text == "ok" and trace[0]["output"] == "error: OSError: download failed"
+    assert trace[1]["output"].count("\n") == 299                       # the trace is complete
+    fed = seen[1]["messages"][2]["content"][1]["content"]
+    assert fed.count("\n") == llm.HEAD_LINES and fed.endswith("200 more lines (the host keeps and renders them all)")

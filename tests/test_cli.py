@@ -81,6 +81,10 @@ def test_session_attach_wires_the_layer_for_the_resolved_cohort(monkeypatch, tmp
     # cohort one (that concatenation is what silently disabled the warm grove)
     assert script.count("GROVE = ") == 1 and "globals().pop('_CANOPY_STATE', None)" not in script
     assert session.attach([], "") .startswith("error:")
+    # the reason nothing resolved reaches the model, not only the user's terminal
+    monkeypatch.setattr(cli, "_resolve_cohorts", lambda specs: (_ for _ in ()).throw(SystemExit("no cohort matches")))
+    assert "no cohort matched 'nowhere'" in session.attach(["sv"], "nowhere")
+    assert "name a tissue" in session.attach(["sv"], "")
 
 
 def test_session_build_makes_every_later_run_warm(monkeypatch):
@@ -100,7 +104,7 @@ def test_session_build_makes_every_later_run_warm(monkeypatch):
     outs = iter(["built: 3", "rows", ""])
     session = cli.Session(gg="/x.gg", base="BASE\n", execute=lambda s: scripts.append(s) or _R(next(outs)), say=lambda m: None)
     assert session.build("GROVE.insert(...)\n") == "built: 3"
-    assert "GROVE = _grove\n" in scripts[0] and "_readonly(_grove)" not in scripts[0]
+    assert "GROVE = _readonly(_grove, ('insert', 'add_edge', 'add_external_key'))" in scripts[0]
     assert session.run("q()\n") == "rows" and session.built
     assert "GROVE = _readonly(_grove)" in scripts[1] and "BASE" not in scripts[1] and "GroveView.open" not in scripts[1]
     assert session.build("x\n").startswith("(built") and "own data built" in session.notes[0]
@@ -125,10 +129,11 @@ def test_own_data_files_are_named_for_build_and_granted(monkeypatch, tmp_path):
         cli._grove_context([str(tmp_path)])
 
 
-def test_answer_renders_the_models_reply_over_the_last_rows(monkeypatch, tmp_path):
-    """The CLI output is the model's prose, then the rows of its last successful run in the
-    chosen format; an abstain (empty reply at the turn cap) is an error naming the cap; the
-    trace file holds every call."""
+def test_answer_renders_the_models_reply_over_the_last_rows(monkeypatch, tmp_path, capsys):
+    """Text format: the model's prose, then the rows of its last successful run. A machine
+    format keeps stdout to the rows and sends the prose to stderr, so `--format json` still
+    parses. An abstain (empty reply at the turn cap) is an error naming the cap; the trace file
+    holds every call. A later successful run that prints nothing clears earlier rows."""
     import json
     from genogrove_canopy import cli, llm
 
@@ -138,18 +143,30 @@ def test_answer_renders_the_models_reply_over_the_last_rows(monkeypatch, tmp_pat
 
         def __init__(self, out):
             self.stdout = out
-    outs = iter(['{"chrom": "chr8", "start": 1, "end": 2, "name": "MYC"}\n', "ignored"])
+    row = '{"chrom": "chr8", "start": 1, "end": 2, "name": "MYC"}\n'
+    outs = iter([row, row, row, ""])
 
     def fake_answer(question, system_prompt, session, **kw):
         session.run("a()\n")
         return "MYC it is.", [{"tool": "run", "input": {"code": "a()\n"}, "output": "x"}]
     monkeypatch.setattr(llm, "answer", fake_answer)
-    args = type("A", (), {"model": "m", "show_code": False, "cohort": None, "format": "tsv",
+    args = type("A", (), {"model": "m", "show_code": False, "cohort": None, "format": "text",
                           "trace": str(tmp_path / "t.json")})()
-    out, err, trace, _ = cli._answer("q", system_prompt="", base="", gg="/x.gg", args=args,
-                                     execute=lambda s: _R(next(outs)))
-    assert err == "" and out.startswith("MYC it is.\n\n") and "chr8\t1\t2" in out
+    execute = lambda s: _R(next(outs))
+    out, err, trace, _, built = cli._answer("q", system_prompt="", base="", gg="/x.gg", args=args, execute=execute)
+    assert err == "" and out.startswith("MYC it is.\n\n") and "MYC" in out.splitlines()[-1] and not built
     assert json.loads((tmp_path / "t.json").read_text())["trace"] == trace
+    args.format = "json"
+    out, err, *_ = cli._answer("q", system_prompt="", base="", gg="/x.gg", args=args, execute=execute)
+    assert json.loads(out)["name"] == "MYC" and "MYC it is." in capsys.readouterr().err
+
+    def two_runs(question, system_prompt, session, **kw):
+        assert session.run("a()\n").startswith("{")
+        assert session.run("b()\n") == "(the program produced no output)"
+        return "Nothing matched.", []
+    monkeypatch.setattr(llm, "answer", two_runs)
+    out, err, *_ = cli._answer("q", system_prompt="", base="", gg="/x.gg", args=args, execute=execute)
+    assert out == "" and err == ""                                      # no stale rows from run a
     monkeypatch.setattr(llm, "answer", lambda *a, **kw: ("", [{"tool": "run"}] * 2))
     out, err, *_ = cli._answer("q", system_prompt="", base="", gg="/x.gg", args=args, execute=None)
     assert out == "" and "2 tool calls" in err and str(llm.MAX_TURNS) in err

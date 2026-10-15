@@ -27,7 +27,7 @@ def test_truncated_output_is_an_error_the_model_sees(monkeypatch, tmp_path, mode
 
     with (sandbox.Worker(output_cap=40) if mode == "worker" else nullcontext()) as worker:
         execute = worker.submit if mode == "worker" else lambda s: sandbox.run(s, output_cap=40)
-        args = SimpleNamespace(model="test", show_code=False, cohort=None, format="json", trace=None)
+        args = SimpleNamespace(model="test", show_code=False, cohort=None, format="text", trace=None)
         out, error, *_ = cli._answer("question", system_prompt="", base="", gg=str(gg),
                                      args=args, execute=execute)
         assert seen[-1].startswith("error:") and "incomplete" in seen[-1]

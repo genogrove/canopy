@@ -69,6 +69,16 @@ def test_ask_streams_steps_then_result(server):
     assert result["records"] and result["code"] == "pass" and result["answer"] and result["trace"]
 
 
+def test_unknown_cohort_rejected_before_the_loop(server):
+    """A picker value no catalog knows is a 400 up front — never a SystemExit inside the agent
+    loop after model turns were paid for, which would kill the handler thread mid-stream."""
+    req = urllib.request.Request(server + "/ask", data=json.dumps({"question": "x", "cohort": "NoSuchTissue12345"}).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(req, timeout=5)
+    assert e.value.code == 400 and b"no cohort matches" in e.value.read()
+
+
 def test_empty_question_rejected(server):
     req = urllib.request.Request(server + "/ask", data=json.dumps({"question": "", "cohort": ""}).encode(),
                                  headers={"Content-Type": "application/json"})

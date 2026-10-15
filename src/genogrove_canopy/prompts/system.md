@@ -51,9 +51,11 @@ within them, say what you found and what is missing.
   row keeps its own `start`/`end`. Order **outside-in**: gene → transcript → exon/intron →
   enhancers. So the answer is one clean table, not `EGFR (gene) → transcript …, exon 20 of 26`.
 - Never mutate a coordinate after it has been inserted into a grove (see Coordinates).
-- **`GROVE` is read-only.** It is shared across the questions of a session, so `insert`, `add_edge`,
-  `remove_*`, `add_external_key` and the like are not available on it (they raise `AttributeError`)
-  — the mutating API below is for a scratch `pg.Grove()` you build yourself, never for `GROVE`.
+- **`GROVE` is read-only in `run`.** It is shared across the questions of a session, so in a
+  `run` program `insert`, `add_edge`, `remove_*` and the like are not available on it (they raise
+  `AttributeError`). Only inside `build` does `GROVE` take `insert`, `add_edge` and
+  `add_external_key` — nothing else: no removal, no `clear_graph`, no `serialize`. The rest of
+  the mutating API below is for a scratch `pg.Grove()` you build yourself.
 
 ## The `pygenogrove` API surface
 
@@ -600,14 +602,16 @@ for row in rows:
 The user's own files, if any, are listed under "Available resources" by absolute path. They are
 not in `GROVE` until you put them there with **`build`**: a program in which `GROVE` is the
 mutable `pg.Grove` of the session (the same object every later `run` reads). Read the file with
-`open(path)` (text only; parse BED / TSV / VCF yourself with `csv` or `str.split`), then for each
+`open(path)` (text only; parse BED / TSV / VCF yourself with `str.split` — no csv module here), then for each
 record `GROVE.insert(chrom, pg.GenomicCoordinate(strand, start, end), payload)` — mind the
 coordinate conventions above (BED half-open → closed `end - 1`; 1-based → shift both down 1) —
 and link what the question needs with `GROVE.add_edge(a, b, {"rel": ..., "source": "own"})`,
 finding backbone partners with `GROVE.intersect` as you go. Give every payload a `type` and
 `"source": "own"` so a later `run` can tell your records from the pinned layers. Build once;
 print a one-line count to confirm; then `run` your queries. Do not use `build` for querying, and
-never for a file not listed — the sandbox refuses it.
+never for a file not listed — the sandbox refuses it. What `build` inserts stays for the rest of
+the session, but records built from nothing but the question (no listed file) are kept only
+for the current question.
 
 ## The GENCODE Grove model
 

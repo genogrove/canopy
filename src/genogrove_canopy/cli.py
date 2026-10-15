@@ -2,8 +2,9 @@
 """Command-line entry point for canopy.
 
 A thin wrapper: parse the question, hand the agent loop (:mod:`genogrove_canopy.llm`) a
-:class:`Session` — the host side of its two tools, which attach layers into the grove and run
-programs under restrictions (:mod:`genogrove_canopy.sandbox`) — and print the answer. The host
+:class:`Session` — the host side of its tools, which attach layers into the grove, build own
+data into it and run programs under restrictions (:mod:`genogrove_canopy.sandbox`) — and print
+the answer. The host
 resolves each dataset to a serialized ``.gg`` and binds it as ``GROVE``; the generated code
 only queries.
 """
@@ -255,7 +256,8 @@ def resources_block(var: str, description: str, layers_block: str, own=()) -> st
         f"**Never open a path yourself** — a handle you "
         f"open lacks the attached layer. A **located** query (a variant at chr7:55191822) reads "
         f"just that locus; a **genome-wide / gene-name** query works from the same handle. "
-        f"Read-only — mutators raise; query with: {', '.join(f'`{m}`' for m in QUERY_SURFACE)}.\n"
+        f"Read-only in `run` — mutators raise; query with: {', '.join(f'`{m}`' for m in QUERY_SURFACE)}. "
+        f"In `build` it also takes `insert`, `add_edge`, `add_external_key`, nothing else.\n"
         f"  Layers in the grove — nodes come back from `intersect` alongside genes, filter on "
         f"`source`/`type`:\n"
         f"  {layers_block.replace(chr(10), chr(10) + '  ')}\n"
@@ -498,13 +500,15 @@ def _hichip_codes(cohorts) -> list:
 
 
 class Session:
-    """The host side of the agent's two tools, for one question over one grove.
+    """The host side of the agent's three tools, for one question over one grove.
 
-    ``attach(layers, cohort)`` grounds the cohort(s) (``override`` wins, then the model's term,
-    then the enhancer default), materialises the layers' data and rebuilds the preamble so the
-    next ``run`` sees them; ``run(code)`` executes one program through ``execute(script)`` (a
-    ``Worker.submit``) and returns its stdout, or the error, as the text the model reads. Both
-    return text, never raise: the model is the one that can fix a bad call.
+    ``attach(layers, cohort)`` grounds the cohort(s) (``override`` wins — validated by the caller
+    before the loop starts — then the model's term, then the enhancer default), materialises the
+    layers' data and rebuilds the preamble so the next ``run`` sees them; ``build(code)`` runs a
+    program with the writers enabled; ``run(code)`` executes one program through
+    ``execute(script)`` (a ``Worker.submit``) and returns its stdout, or the error, as the text
+    the model reads. A bad call comes back as text; anything that does raise (a download
+    failing) is turned into an error result by the loop, so the model is the one that reacts.
 
     Attached layers accumulate across calls within the question, so ``COHORTS`` names every
     cohort the model asked for. Across questions the sandbox's warm grove keeps what was
@@ -526,10 +530,11 @@ class Session:
         if not layers:
             return "error: name at least one layer (enhancers, sv, hichip)"
         cohorts, note = _resolve_query_cohorts(self.override, cohort, layers)
-        if note and note != "default":
+        said = []
+        if note and note != "default":  # the reason nothing resolves: the model must read it too
             self.say(note)
             self.notes.append(note)
-        said = []
+            said.append(note)
         links, svs, loops = prepare_layers(cohorts, layers, lambda m: (self.say(m), said.append(m)))
         self.notes += [m for m in said if m.startswith("no ")]
         self.cohort_links.update(links)
@@ -541,7 +546,7 @@ class Session:
             attached.append(f"{what} attached from {'; '.join(cohorts)}"
                             + (" (default — the question named no tissue)" if note == "default" else ""))
             self.notes.append(attached[-1])
-        return "\n".join(attached + [m for m in said if m.startswith("no ")] + [
+        return "\n".join(attached + [m for m in said if m not in attached and not m.startswith("Loading")] + [
             f"COHORTS = {json.dumps(sorted(self.cohort_links))}",
             f"SV_COHORTS = {json.dumps(sorted(self.sv_files))}",
             f"HICHIP_COHORTS = {json.dumps(sorted(self.hichip_files))}",
@@ -568,14 +573,13 @@ class Session:
         return out if out.strip() else "(built; the program printed nothing)"
 
     def run(self, code):
-        self.code = code
         out = self._execute(code)
         if out.startswith("error:"):
             return out
-        if not out.strip():
-            return "(the program produced no output)"
-        self.stdout = out
-        return out
+        # every success replaces the rows, an empty one included — the answer must not sit on
+        # the rows of an earlier, superseded run
+        self.code, self.stdout = code, out
+        return out if out.strip() else "(the program produced no output)"
 
 
 def _show_turn(entry) -> None:
@@ -589,15 +593,18 @@ def _show_turn(entry) -> None:
     print(entry["output"], file=sys.stderr)
 
 
-def _answer(question, *, system_prompt, base, gg, args, execute):
+def _answer(question, *, system_prompt, base, gg, args, execute, warm=False):
     """Answer one question: the agent loop over a :class:`Session`, then render.
 
     ``execute`` is a ``script -> SandboxResult`` callable (a ``Worker.submit``). Returns
-    ``(text, error, trace, seconds)`` — ``text`` is the model's answer with the last run's rows
-    rendered in ``args.format`` beneath it; exactly one of text/error is non-empty.
+    ``(out, error, trace, seconds, built)`` — ``out`` is what goes to stdout: the model's answer
+    with the last run's rows rendered in ``args.format`` beneath it for ``text``; for the machine
+    formats only the rows, the answer goes to stderr so stdout stays parseable. Exactly one of
+    out/error is non-empty. ``built`` says a ``build`` happened, so a REPL can keep later
+    questions warm (``warm``).
     """
     session = Session(gg=gg, base=base, execute=execute, override=args.cohort or (),
-                      warm=bool(getattr(args, "data", ())))
+                      warm=warm or bool(getattr(args, "data", ())))
     log.say(f"Asking {args.model}")
     t0 = time.perf_counter()
     text, trace = llm.answer(question, system_prompt, session, model=args.model,
@@ -606,9 +613,13 @@ def _answer(question, *, system_prompt, base, gg, args, execute):
     if args.trace:
         Path(args.trace).write_text(json.dumps({"question": question, "answer": text, "trace": trace}, indent=1))
     if not text:
-        return "", f"no answer after {len(trace)} tool calls — the turn cap ({llm.MAX_TURNS}) was reached", trace, took
-    rows = _render(session.stdout, args.format) if session.stdout else ""
-    return text + "\n" + (f"\n{rows}" if rows.strip() else ""), "", trace, took
+        return "", (f"no answer after {len(trace)} tool calls — the turn cap ({llm.MAX_TURNS}) "
+                    "was reached or the reply was cut off"), trace, took, session.built
+    rows = _render(session.stdout, args.format) if session.stdout.strip() else ""
+    if args.format != "text":
+        print(text, file=sys.stderr)
+        return rows, "", trace, took, session.built
+    return text + "\n" + (f"\n{rows}" if rows.strip() else ""), "", trace, took, session.built
 
 
 def _interactive(args, *, system_prompt, preamble, data_paths, site_dir) -> int:
@@ -616,6 +627,7 @@ def _interactive(args, *, system_prompt, preamble, data_paths, site_dir) -> int:
     worker = sandbox.Worker(data_paths=data_paths, extra_syspath=[site_dir])
     print("canopy interactive — one question per line; Ctrl-D or 'exit' to quit.",
           file=sys.stderr)
+    warm = False  # once a question builds into the grove, every later one must use the warm grove
     try:
         while True:
             try:
@@ -628,12 +640,13 @@ def _interactive(args, *, system_prompt, preamble, data_paths, site_dir) -> int:
             if question in ("exit", "quit"):
                 break
             try:
-                out, err, trace, took = _answer(question, system_prompt=system_prompt,
-                                                base=preamble, gg=data_paths[0], args=args,
-                                                execute=worker.submit)
+                out, err, trace, took, built = _answer(question, system_prompt=system_prompt,
+                                                       base=preamble, gg=data_paths[0], args=args,
+                                                       execute=worker.submit, warm=warm)
             except Exception as exc:  # e.g. an LLM error — keep the session alive
                 print(f"canopy: {exc}", file=sys.stderr)
                 continue
+            warm = warm or built
             if err:
                 print(err, file=sys.stderr)
             else:
@@ -675,6 +688,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
+        if args.cohort:  # a bad override must fail here, before any model turn is paid for
+            _resolve_cohorts(args.cohort)
         # The grove is cohort-independent (GENCODE + cCREs). Layers are attached per
         # question when the model calls `attach` — see Session.
         _prepare()
@@ -695,7 +710,7 @@ def main(argv: list[str] | None = None) -> int:
     # and the memoised grove makes every run after the first cheap.
     try:
         with sandbox.Worker(data_paths=data_paths, extra_syspath=[site_dir]) as worker:
-            out, err, _trace, _took = _answer(
+            out, err, _trace, _took, _built = _answer(
                 args.question, system_prompt=system_prompt, base=preamble, gg=data_paths[0],
                 args=args, execute=worker.submit,
             )
