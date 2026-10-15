@@ -224,6 +224,9 @@ def test_prepare_layers_expression_and_cn_use_the_sv_cohort_code_and_their_own_c
     assert expression_files == {"LIRI-JP": "/x/expr/LIRI-JP.tsv"}
     assert cn_files == {"LIRI-JP": "/x/cn/LIRI-JP.tsv", "BOCA-UK": "/x/cn/BOCA-UK.tsv"}
     assert "BOCA-UK" not in {r["project_code"] for r in resources.expression_cohorts()}
+    # the missing cohort is named even though the other one loaded
+    assert any(m.startswith("no PCAWG expression for cohort(s) BOCA-UK") for m in said)
+    assert not any(m.startswith("no PCAWG copy number") for m in said)
     # every expression / CN cohort is an SV cohort: the sample ids are the SV layer's
     sv = {r["project_code"] for r in resources.pcawg_cohorts()}
     assert {r["project_code"] for r in resources.expression_cohorts()} <= sv

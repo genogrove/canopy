@@ -218,7 +218,7 @@ def _grove_context(own=()):
     ``resources.ensure_all_grove``). The preamble binds ``GROVE`` to an open ``GroveView`` of it,
     so one `intersect` returns genes *and* cCREs. The enhancer layer is **not** in the artifact
     (it is cohort-specific): once the model calls ``attach``, ``Session`` runs
-    ``preamble.build(gg, cohort_links, sv_files)`` **instead of** this base preamble — the two
+    ``preamble.build(gg, <the per-layer file maps>)`` **instead of** this base preamble — the two
     are exclusive, never concatenated: the base one evicts ``_CANOPY_STATE`` from the query's
     namespace, the cohort one memoises the attached grove in it. Both bind ``GROVE``, so
     generated code never opens a path itself.
@@ -488,12 +488,15 @@ def prepare_layers(cohorts, layers, say):
     ):
         if layer not in layers:
             continue
-        codes = [c for c in _pcawg_codes(cohorts) if c in known]
+        asked = _pcawg_codes(cohorts)
+        codes = [c for c in asked if c in known]
         if codes:
             say(f"Loading PCAWG {what} — cohort(s) {'; '.join(codes)}")
             files.update({c: str(mod.cohort_file(c)) for c in codes})
-        elif cohorts:
-            say(f"no PCAWG {what} for cohort(s) {names} — no {what} attached")
+        missing = [c for c in asked if c not in known]
+        if cohorts and (missing or not codes):  # said per missing cohort, even when others load
+            say(f"no PCAWG {what} for cohort(s) {'; '.join(missing) or names} — no {what} attached"
+                + (" for them" if codes else ""))
     return cohort_links, sv_files, hichip_files, expression_files, cn_files
 
 
@@ -551,7 +554,7 @@ class Session:
 
     def attach(self, layers, cohort=""):
         if not layers:
-            return "error: name at least one layer (enhancers, sv, hichip)"
+            return f"error: name at least one layer ({', '.join(llm._LAYERS)})"
         cohorts, note = _resolve_query_cohorts(self.override, cohort, layers)
         said = []
         if note and note != "default":  # the reason nothing resolves: the model must read it too

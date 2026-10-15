@@ -313,9 +313,11 @@ attach(layers=["enhancers"], cohort="K562; HepG2")   # several cohorts, for a co
   directly. Leave it empty if the question names none. A term with no match loads nothing and
   the result says so — it never substitutes.
 - `layers` is exactly the layers the question needs — each costs seconds to attach (a large
-  HiChIP cohort, tens of seconds). Without an `attach`, `GROVE` holds no enhancer, SV or
-  contact data at all. The result tells you what is attached now; attach again if a later
-  step needs another layer or cohort.
+  HiChIP cohort, tens of seconds; an expression cohort, a few seconds). Without an `attach`,
+  `GROVE` holds no enhancer, SV, contact, expression or copy-number data at all. The result
+  tells you what is attached now; attach again if a later step needs another layer or cohort.
+  Attach runs inside the same time budget as a program, so put a heavy layer in its own
+  `attach` call rather than listing four layers at once.
 - **`COHORTS` (rE2G biosample ids), `SV_COHORTS` (PCAWG project codes), `HICHIP_COHORTS`
   (TCGA projects), `EXPRESSION_COHORTS` and `CN_COHORTS` (PCAWG project codes), all defined
   for you, name the cohorts this question is about, and you must filter on them.** In an
@@ -623,8 +625,11 @@ What the attached layer looks like in `GROVE` — a **payload** on the gene, not
   expression is a dict lookup. A tumour with SVs but no RNA-seq is simply absent from `values`
   — say how many carriers had expression, never fill in.
 - Values are log2(FPKM-UQ + 0.001): −10 is unexpressed, ~0–3 low, >5 high. Compare groups by
-  **median and group sizes**, and emit both groups as rows; do not compute a p-value unless the
-  question asks and you implement the test yourself in the program.
+  **median and group sizes** — a true median, the mean of the two middle values when the
+  group is even (the statistics module is not available; the worked example shows the three
+  lines) —
+  and emit both groups as rows; do not compute a p-value unless the question asks and you
+  implement the test yourself in the program.
 - Copy number is the first confounder of any expression gain: if `cn` is attached too, report
   the carriers' `total_cn` under the gene next to their expression (see "Copy number").
 
@@ -633,6 +638,11 @@ first `attach(layers=["sv", "expression"], cohort="liver")`, then `run`:
 
 ```python
 import pygenogrove as pg
+
+def median(vals):                      # the real median: mean of the two middle values when even
+    v = sorted(vals)
+    n = len(v)
+    return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
 
 g = GROVE
 tert = next(k for k in g.intersect(pg.GenomicCoordinate("*", 1_253_147, 1_253_147), "chr5")
@@ -647,11 +657,10 @@ for node, m in g.get_edge_list(tert):
     groups = {"carriers": [v for s, v in values.items() if s in carriers],
               "non-carriers": [v for s, v in values.items() if s not in carriers]}
     for group, vals in groups.items():
-        vals.sort()
         rows.append({"chrom": "chr5", "start": tert.value.start, "end": tert.value.end,
                      "type": "expression", "name": f"TERT:{group}", "gene": "TERT",
                      "cohort": m["cohort"], "group": group, "n": len(vals),
-                     "median": vals[len(vals) // 2] if vals else None,
+                     "median": median(vals) if vals else None,
                      "unit": node.data["unit"]})
 print(f'TERT expression in {", ".join(EXPRESSION_COHORTS)} ({len(carriers)} rearranged tumours, '
       f'{len(rows)} groups):')
@@ -679,7 +688,9 @@ tumour, indexed like genes and cCREs:
   is the consensus confidence (3 best). Any of them is `null` where the consensus could not
   call the segment — skip those, never read a null as 0.
 - No edge joins a segment to a gene: overlap is always a spatial query. Segments tile the
-  genome, so a point query returns one segment per tumour that has one there.
+  genome, so a point query returns one segment per tumour that has one there — hundreds of
+  hits in a large cohort. **Always filter `intersect` results on `type` first**; a program
+  that lists every key at a locus is swamped by segments once `cn` is attached.
 
 Worked example — "What is the copy number of MYC across breast tumours?" — first
 `attach(layers=["cn"], cohort="breast")`, then `run`:

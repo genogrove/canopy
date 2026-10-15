@@ -72,7 +72,8 @@ def test_cohort_file_extracts_one_project_from_the_pinned_tarball(monkeypatch, t
     with tarfile.open(tgz, "w:gz") as t:
         t.add(tmp_path / "BRCA-US.tsv", arcname="BRCA-US.tsv")
     monkeypatch.setattr(resources, "resolve", lambda name: {"pcawg.cn": tgz}[name])
-    monkeypatch.setattr(resources, "cn_cohorts", lambda: [{"project_code": "BRCA-US", "n_samples": 1, "n_segments": 1, "n_dropped_liftover": 0}])
+    monkeypatch.setattr(resources, "cn_cohorts", lambda: [{"project_code": "BRCA-US", "n_samples": 1, "n_segments": 1,
+                                                            "n_dropped_liftover": 0, "n_dropped_length": 0}])
     monkeypatch.setattr(cn, "CN_DIR", tmp_path / "cn_cohorts")
     out = cn.cohort_file("BRCA-US")
     assert out == (tmp_path / "cn_cohorts" / "BRCA-US.tsv").resolve()

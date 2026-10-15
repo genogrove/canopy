@@ -14,14 +14,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dict lookup; `layers/cn.py` attaches one indexed `cn_segment` per segment per tumour (total,
   major, minor copy number, consensus star), reached by `intersect` like genes. Both resolve
   through the SV layer's cohort unit (PCAWG project code, via the existing bridge) and their
-  own packaged catalogs (`data/expression_cohorts.tsv`: 26 codes, 1,007 tumours;
+  own packaged catalogs (`data/expression_cohorts.tsv`: 29 codes, 1,233 tumours;
   `data/cn_cohorts.tsv`: 47 codes, 2,748 tumours); `attach(layers=["expression", "cn"])`,
-  echoed as `EXPRESSION_COHORTS` / `CN_COHORTS`. Data: the Xena originals are pinned by URL +
-  sha256 (`pcawg.rnaseq.xena`, 683 MB; `pcawg.cn.xena.hg19`, 38 MB); `tools/build_pcawg_xena.py`
+  echoed as `EXPRESSION_COHORTS` / `CN_COHORTS`; a requested cohort the layer lacks is named
+  even when another loads. Data: the Xena originals are pinned by URL + sha256
+  (`pcawg.rnaseq.xena`, 683 MB; `pcawg.cn.xena.hg19`, 38 MB); `tools/build_pcawg_xena.py`
   re-cuts them per project — expression to GENCODE v50 genes (51,223 kept, 6,597 v19-only
-  dropped) with the SV aliquot as the sample id; copy number lifted to GRCh38 with the SV
-  layer's chain file, both ends independently (827,894 segments kept, 131,301 dropped, mostly
-  ends in assembly gaps, counted per cohort) — and the derived tarballs are re-hosted and
+  dropped) with the SV aliquot as the sample id, joined by specimen or, for RNA-seq under
+  another specimen id of a donor with one SV tumour, by donor; copy number lifted to GRCh38
+  with the SV layer's chain file, both ends independently (815,575 segments kept; 131,301
+  dropped where an end did not lift cleanly and 12,319 where the lifted length moved by more
+  than 10 % and 1 Mb, both counted per cohort) — and the derived tarballs are re-hosted and
   pinned by commit + sha256 as `pcawg.expression` and `pcawg.cn`. The prompt gains "Gene
   expression" and "Copy number" sections whose worked examples run in the sandbox in CI
   ([#43](https://github.com/genogrove/canopy/pull/43)).

@@ -373,8 +373,8 @@ def test_expression_worked_example_splits_carriers_from_the_rest_by_sample_id(tm
     lines = result.stdout.splitlines()
     assert lines[0] == "TERT expression in LIRI-JP (2 rearranged tumours, 2 groups):"
     rows = {r["group"]: r for r in map(json.loads, lines[1:])}
-    assert (rows["carriers"]["n"], rows["carriers"]["median"]) == (2, 6.0)
-    assert (rows["non-carriers"]["n"], rows["non-carriers"]["median"]) == (2, -8.0)
+    assert (rows["carriers"]["n"], rows["carriers"]["median"]) == (2, 5.5)         # a true median, not the upper middle
+    assert (rows["non-carriers"]["n"], rows["non-carriers"]["median"]) == (2, -8.95)
     assert rows["carriers"]["unit"] == "log2(fpkm-uq+0.001)" and rows["carriers"]["type"] == "expression"
 
 

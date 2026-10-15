@@ -7,17 +7,24 @@ originals → two ready-to-pin tarballs and their catalogs.
 Build-time step, not run on a user's machine (same shape as `tools/build_hichip_cohorts.py`):
 
 * `pcawg.rnaseq.xena` — the PCAWG-3 gene × specimen matrix (log2(FPKM-UQ + 0.001), GENCODE v19
-  gene ids, 1,521 columns: ICGC specimen ids plus a few aliquot uuids). Re-cut into one wide
-  table per ICGC project code, `<code>.tsv`: `gene` (ENSG, unversioned), `chrom`, `tss`
-  (GENCODE v50, from the packaged `gene_tss.tsv.gz`), then one column per tumour named by its
-  **WGS aliquot id** — the id the SV layer uses — resolved through the pinned sample sheet
-  (specimen → the WGS tumour aliquot that is in the packaged SV catalog). Specimens with no
-  such aliquot, and genes absent from the v50 backbone, are dropped and counted.
+  gene ids, 1,521 columns: 1,466 ICGC specimen ids plus 55 aliquot uuids the sample sheet does
+  not know, which stay unmatched). Re-cut into one wide table per ICGC project code,
+  `<code>.tsv`: `gene` (ENSG, unversioned), `chrom`, `tss` (GENCODE v50, 1-based, from the
+  packaged `gene_tss.tsv.gz`), then one column per tumour named by its **WGS aliquot id** —
+  the id the SV layer uses — resolved through the pinned sample sheet: the specimen's own WGS
+  tumour aliquot when it is in the packaged SV catalog, else — RNA-seq is often registered
+  under a different specimen id than the WGS of the same tumour — the donor's SV aliquot when
+  the donor has exactly one. Specimens that resolve neither way, and genes absent from the
+  v50 backbone, are dropped and counted.
 * `pcawg.cn.xena.hg19` — the PCAWG-11 consensus segments (specimen × segment, hg19). Lifted
   to GRCh38 with the same chain file `tools/liftover_pcawg_sv.py` uses, both ends
-  independently; a segment is dropped if either end fails to lift, they land on different
-  chromosomes, or the lifted end is not after the start. Re-cut per project with the same
-  aliquot resolution, written BED half-open in the column shape `layers/cn.py` attaches.
+  independently; a segment is dropped if either end fails to lift, lands on another
+  chromosome or in a reversed block, or the lifted end is not after the start
+  (`n_dropped_liftover`), and also if the lifted length differs from the original by more
+  than 10 % **and** more than 1 Mb (`n_dropped_length`) — two ends that each lift cleanly can
+  still bracket inserted or removed sequence, and a stretched segment would assert a copy
+  number over bases the call never covered. Re-cut per project with the same aliquot
+  resolution, written BED half-open in the column shape `layers/cn.py` attaches.
 
 Outputs: `pcawg_rnaseq_fpkm_uq_log2.by_cohort.tgz`, `pcawg_consensus_cn.hg38.by_cohort.tgz`,
 `expression_cohorts.tsv`, `cn_cohorts.tsv` (the two catalogs to copy to
@@ -43,15 +50,59 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from liftover_pcawg_sv import _chain_file  # noqa: E402  the same pinned chain file
 
 
+def resolve_specimens(rows: list[dict], sv: dict) -> dict:
+    """``specimen id -> WGS aliquot id`` for the aliquots in ``sv`` (aliquot -> project code),
+    from sample-sheet ``rows``: a specimen's own SV aliquot first; else, for a tumour specimen
+    of a donor with exactly one SV aliquot, that aliquot (RNA-seq and WGS of one tumour are
+    often registered under different specimen ids). A donor with several SV tumours gets no
+    guess — the RNA could belong to any of them."""
+    own = {r["icgc_specimen_id"]: r["aliquot_id"] for r in rows if r["aliquot_id"] in sv}
+    donor_aliquots = defaultdict(set)
+    for r in rows:
+        if r["aliquot_id"] in sv:
+            donor_aliquots[r["icgc_donor_id"]].add(r["aliquot_id"])
+    out = dict(own)
+    for r in rows:
+        spec = r["icgc_specimen_id"]
+        if spec in out or r["dcc_specimen_type"].startswith("Normal"):
+            continue
+        aliquots = donor_aliquots.get(r["icgc_donor_id"], ())
+        if len(aliquots) == 1:
+            out[spec] = next(iter(aliquots))
+    return out
+
+
 def _aliquot_map() -> tuple[dict, dict]:
-    """``(specimen -> WGS aliquot, aliquot -> WGS aliquot)`` restricted to the aliquots in the
-    packaged SV catalog, plus ``aliquot -> project code``."""
     sv = {a: r["project_code"] for r in resources.pcawg_cohorts() for a in r["aliquot_ids"]}
     with open(resources.resolve("pcawg.sample_sheet"), newline="") as fh:
         rows = list(csv.DictReader(fh, delimiter="\t"))
-    by_specimen = {r["icgc_specimen_id"]: r["aliquot_id"] for r in rows if r["aliquot_id"] in sv}
-    by_aliquot = {r["aliquot_id"]: by_specimen.get(r["icgc_specimen_id"]) for r in rows}
-    return {**by_aliquot, **by_specimen}, sv
+    return resolve_specimens(rows, sv), sv
+
+
+#: A lifted segment may differ from the original by this much before it is dropped: more
+#: than both the fraction and the absolute length. Inserted hg38 centromere models stretch a
+#: few long segments legitimately; a 10 Mb call becoming 33 Mb is not that.
+LENGTH_TOLERANCE = (0.10, 1_000_000)
+
+
+def lift_segment(lo, chrom: str, start: int, end: int):
+    """hg19 1-based inclusive ``[start, end]`` -> hg38 0-based half-open ``(start, end)``, or
+    ``None`` (``"liftover"``: an end fails, lands elsewhere, in a reversed block, or before the
+    start) or ``"length"`` (both lift, but the segment stretched or shrank beyond
+    :data:`LENGTH_TOLERANCE`). Chain positions are 0-based; a reversed block is refused because
+    the segment's extent on the other strand is not what its two ends say."""
+    def one(pos):
+        hits = lo.convert_coordinate(chrom, pos)
+        return hits[0][1] if hits and hits[0][0] == chrom and hits[0][2] == "+" else None
+
+    s, e = one(start - 1), one(end - 1)
+    if s is None or e is None or e < s:
+        return None
+    before, after = end - start + 1, e - s + 1
+    frac, absolute = LENGTH_TOLERANCE
+    if abs(after - before) > frac * before and abs(after - before) > absolute:
+        return "length"
+    return s, e + 1
 
 
 def _tss() -> dict:
@@ -104,12 +155,8 @@ def build_expression(out_dir: Path, resolve: dict, project: dict) -> dict:
 def build_cn(out_dir: Path, resolve: dict, project: dict, lo) -> dict:
     tables = out_dir / "cn"
     tables.mkdir(parents=True, exist_ok=True)
-    handles, n_seg, samples, dropped, unmatched = {}, Counter(), defaultdict(set), Counter(), set()
-
-    def lift(chrom, pos):
-        hits = lo.convert_coordinate(chrom, pos)
-        return hits[0][1] if hits and hits[0][0] == chrom and hits[0][2] == "+" else None
-
+    handles, n_seg, samples, unmatched = {}, Counter(), defaultdict(set), set()
+    dropped = {"liftover": Counter(), "length": Counter()}
     with open(resources.resolve("pcawg.cn.xena.hg19"), newline="") as fh:
         for r in csv.DictReader(fh, delimiter="\t"):
             aliquot = resolve.get(r["sampleID"])
@@ -118,23 +165,25 @@ def build_cn(out_dir: Path, resolve: dict, project: dict, lo) -> dict:
                 continue
             code = project[aliquot]
             chrom = r["chr"] if r["chr"].startswith("chr") else f"chr{r['chr']}"
-            start, end = lift(chrom, int(r["start"]) - 1), lift(chrom, int(r["end"]) - 1)  # 1-based inclusive -> 0-based
-            if start is None or end is None or end < start:
-                dropped[code] += 1
+            lifted = lift_segment(lo, chrom, int(r["start"]), int(r["end"]))
+            if lifted is None or lifted == "length":
+                dropped["liftover" if lifted is None else "length"][code] += 1
                 continue
+            start, end = lifted
             out = handles.get(code)
             if out is None:
                 out = handles[code] = open(tables / f"{code}.tsv", "w")
                 out.write("\t".join(CN_FIELDS) + "\n")
-            out.write("\t".join((chrom, str(start), str(end + 1), r["total_cn"], r["major_cn"],
+            out.write("\t".join((chrom, str(start), str(end), r["total_cn"], r["major_cn"],
                                  r["minor_cn"], r["star"], aliquot, code)) + "\n")
             n_seg[code] += 1
             samples[code].add(aliquot)
     for h in handles.values():
         h.close()
-    print(f"cn: {sum(n_seg.values())} segments kept, {sum(dropped.values())} dropped in liftover, "
+    print(f"cn: {sum(n_seg.values())} segments kept, {sum(dropped['liftover'].values())} dropped in liftover, "
+          f"{sum(dropped['length'].values())} dropped for length, "
           f"{sum(len(s) for s in samples.values())} tumours in {len(handles)} cohorts, {len(unmatched)} specimens unmatched")
-    return {code: (len(samples[code]), n_seg[code], dropped[code]) for code in handles}
+    return {code: (len(samples[code]), n_seg[code], dropped["liftover"][code], dropped["length"][code]) for code in handles}
 
 
 def _tar(out_dir: Path, name: str, tables: Path) -> None:
@@ -161,9 +210,9 @@ def main() -> None:
 
     cn = build_cn(out_dir, resolve, project, LiftOver(str(_chain_file(out_dir))))
     with (out_dir / "cn_cohorts.tsv").open("w") as fh:
-        fh.write("project_code\tn_samples\tn_segments\tn_dropped_liftover\n")
-        for code, (n, s, d) in sorted(cn.items()):
-            fh.write(f"{code}\t{n}\t{s}\t{d}\n")
+        fh.write("project_code\tn_samples\tn_segments\tn_dropped_liftover\tn_dropped_length\n")
+        for code, (n, s, d, dl) in sorted(cn.items()):
+            fh.write(f"{code}\t{n}\t{s}\t{d}\t{dl}\n")
     _tar(out_dir, "pcawg_consensus_cn.hg38.by_cohort.tgz", out_dir / "cn")
 
 

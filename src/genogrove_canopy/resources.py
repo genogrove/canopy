@@ -339,25 +339,25 @@ RESOURCES: dict[str, Resource] = {
         name="pcawg.expression",
         url=(
             "https://huggingface.co/datasets/genogrove/canopy/resolve/"
-            "f9e633d96b0ab194d7da223917eb9860f4b4c39b"
+            "a8d92017d4274fb5a2fc6ca82d9eeba06f8c6ef3"
             "/layers/genomic/pcawg-expression/pcawg_rnaseq_fpkm_uq_log2.by_cohort.tgz"
         ),
-        sha256="82d04e7b84b2e412445a2cd860740e85dd159ef833e8df88a1b45712eec776f5",
+        sha256="9193f30a04c76958d867df0d023bc0ebaf06e3521eca7bec0f9dd928bf730509",
         filename="pcawg_rnaseq_fpkm_uq_log2.by_cohort.tgz",
         description="PCAWG-3 RNA-seq expression (log2 FPKM-UQ), one table per ICGC project, "
-                    "1,007 tumours in 26 projects, 51,223 GENCODE v50 genes, keyed by WGS aliquot.",
+                    "1,233 tumours in 29 projects, 51,223 GENCODE v50 genes, keyed by WGS aliquot.",
     ),
     "pcawg.cn": Resource(
         name="pcawg.cn",
         url=(
             "https://huggingface.co/datasets/genogrove/canopy/resolve/"
-            "1bbefee076eabb1b3a1d9f8f40f490d56067ca4b"
+            "b75c4b9074379585ff136fb081a8463ed69cb7b6"
             "/layers/genomic/pcawg-cn/pcawg_consensus_cn.hg38.by_cohort.tgz"
         ),
-        sha256="5a2c3d050e33a9c8c88af1867e7c1785f0811e8856068d658e99434ed4017b0b",
+        sha256="08a11239749ee4866b84db897b87ca1709bd02eaed84286f0a36f40cdb015078",
         filename="pcawg_consensus_cn.hg38.by_cohort.tgz",
         description="PCAWG-11 consensus copy-number segments lifted to GRCh38, one table per ICGC "
-                    "project, 2,748 tumours in 47 projects, 827,894 segments.",
+                    "project, 2,748 tumours in 47 projects, 815,575 segments.",
     ),
     "tcga.hichip.loops": Resource(
         name="tcga.hichip.loops",
@@ -864,13 +864,15 @@ def expression_cohorts() -> list[dict]:
 @lru_cache(maxsize=1)
 def cn_cohorts() -> list[dict]:
     """The PCAWG copy-number cohorts from the packaged catalog, written by
-    ``tools/build_pcawg_xena.py``: ``n_samples``, ``n_segments``, ``n_dropped_liftover``."""
+    ``tools/build_pcawg_xena.py``: ``n_samples``, ``n_segments``, ``n_dropped_liftover``
+    (an end that did not lift cleanly), ``n_dropped_length`` (lifted, but stretched or shrunk
+    beyond the tool's tolerance)."""
     import csv
 
     with _CN_COHORTS.open(newline="") as fh:
         rows = list(csv.DictReader(fh, delimiter="\t"))
     for r in rows:
-        for k in ("n_samples", "n_segments", "n_dropped_liftover"):
+        for k in ("n_samples", "n_segments", "n_dropped_liftover", "n_dropped_length"):
             r[k] = int(r[k])
     return rows
 
