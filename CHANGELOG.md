@@ -6,26 +6,25 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Changed
-- **canopy is an agent loop, not one-shot codegen**: `llm.answer` gives the model two tools —
-  `attach(layers, cohort)` and `run(code)` — feeds every result back, and stops when the model
+### Added
+- **canopy is an agent loop, not one-shot codegen**: `llm.answer` gives the model three
+  tools — `attach(layers, cohort)` for a pinned cohort's layers, `build(code)` for its own
+  data, `run(code)` for a read-only query — feeds every result back, and stops when the model
   replies without a tool call or reaches `MAX_TURNS` (8; the host then reports an abstain
   instead of a guess). The model reads the rows it printed and runs again on an error or an
   unexpected result; the final reply is prose, with the last run's rows rendered beneath it.
   The `COHORT:` / `LAYERS:` declaration lines are gone: `attach` is the declaration, and its
-  result tells the model what `COHORTS` / `SV_COHORTS` / `HICHIP_COHORTS` now hold. The host
-  side of both tools is `cli.Session`, shared by the CLI and `serve`; one-shot `canopy` now
-  uses a warm worker too, so repeated runs within a question reuse the grove. Every tool call
-  is kept as the trace: `--show-code` prints it as it happens, `--trace FILE` writes it as
-  JSON, and `serve` returns it with the answer and shows it in the page.
-- **Own data**: `--data FILE` (CLI and `serve`, repeatable) grants one file to the sandbox and
-  names it to the model; a third tool, `build(code)`, runs a program with `GROVE` bound to the
-  session's mutable grove (`preamble.build(mutable=True)`) so the agent can `insert`/`add_edge`
-  the file's records itself, with `"source": "own"`. What it builds persists in the warm grove
-  like an attached cohort; every later `run` in a session with own files takes the memoised
-  grove (`warm=True`) instead of the lazy view, so it sees them. `run` stays read-only.
-
-### Added
+  result tells the model what `COHORTS` / `SV_COHORTS` / `HICHIP_COHORTS` now hold. `build`
+  runs with `GROVE` bound to the session's mutable grove (`preamble.build(mutable=True)`) so
+  the agent can `insert`/`add_edge` the records of a `--data FILE` (CLI and `serve`,
+  repeatable; granted to the sandbox and named in the prompt) itself, tagged
+  `"source": "own"`; what it builds persists in the warm grove like an attached cohort, and
+  every later `run` in a session with own files takes the memoised grove (`warm=True`) so it
+  sees them. The host side of the tools is `cli.Session`, shared by the CLI and `serve`;
+  one-shot `canopy` uses a warm worker too. Every tool call is kept as the trace:
+  `--show-code` prints it as it happens, `--trace FILE` writes it as JSON, and `serve`
+  returns it with the answer and shows it in the page
+  ([#42](https://github.com/genogrove/canopy/pull/42)).
 - **Chromatin-contact layer (TCGA H3K27ac HiChIP)**: `layers/hichip.py` attaches one
   `contact_edge` per loop per tumour between two 10 kb windows — FitHiChIP's anchors are a fixed
   genome-wide grid (every anchor 10 kb, grid-aligned, no two overlap; 225,391 distinct windows
