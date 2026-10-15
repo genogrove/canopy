@@ -83,7 +83,7 @@ $ uv run canopy serve
 
 ## What you can ask about
 
-One grove, queried through one handle, holds five layers:
+One grove, queried through one handle, holds seven layers:
 
 - **Gene structure** — GENCODE v50: genes, transcripts and exons, with `contains` and
   `first_exon`/`next` splice-chain edges, and CDS ranges on each exon. Only genes are
@@ -112,6 +112,22 @@ One grove, queried through one handle, holds five layers:
   10 kb windows, inserted as indexed `hichip_anchor` nodes on first use. No edge joins a
   window to a gene or cCRE: what a window overlaps is a spatial query, in both directions,
   and a window is the unit of evidence — nothing finer than 10 kb is asserted.
+- **Gene expression** — PCAWG-3 RNA-seq (TopHat2 + STAR, FPKM-UQ, log2), 1,233 tumours
+  in 29 ICGC project codes, attached per question by tumour cohort as one graph-only
+  node per gene per cohort hung off the gene, its values keyed by the tumour's WGS aliquot
+  id. That is the id the SV layer puts on every breakpoint edge, so "carriers versus
+  non-carriers" is a dictionary lookup, and a tumour without RNA-seq is simply absent.
+  RNA-seq registered under a different specimen id than the tumour's WGS is joined through
+  the donor when the donor has exactly one SV tumour, never guessed otherwise.
+- **Copy number** — PCAWG-11 consensus segments (six callers reconciled on the consensus
+  SV breakpoints), lifted to GRCh38, 2,748 tumours in all 47 project codes, attached per
+  question by tumour cohort as one indexed `cn_segment` per segment per tumour with total,
+  major and minor copy number and the consensus confidence. The copy number of a gene in
+  a tumour is the segment under it for that sample, a spatial query; a gene that spans a
+  breakpoint has two. Segments whose ends did not lift cleanly (13.5%, mostly ends in
+  assembly gaps), and segments whose lifted length moved by more than 10% and 1 Mb
+  (1.3%, ends bracketing inserted or removed sequence), were dropped and counted, never
+  guessed.
 
 Enhancer answers carry a `ccre_overlap` list rather than a single class: most rE2G
 windows span several cCREs, and about a third span cCREs of differing classes, so

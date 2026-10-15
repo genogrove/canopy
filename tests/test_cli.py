@@ -199,10 +199,38 @@ def test_prepare_layers_reports_a_declared_layer_with_no_data(monkeypatch, tmp_p
     monkeypatch.setattr(enhancers, "links_file", lambda c: links)
     said = []
     cohorts = {"K562": {"re2g": ["EFO:0002067"], "pcawg": [], "hichip": []}}
-    cohort_links, sv_files, hichip_files = cli.prepare_layers(cohorts, ["enhancers", "sv", "hichip"], said.append)
+    cohort_links, sv_files, hichip_files, expression_files, cn_files = cli.prepare_layers(
+        cohorts, ["enhancers", "sv", "hichip", "expression", "cn"], said.append)
     assert cohort_links == {"EFO:0002067": str(links)} and sv_files == {} and hichip_files == {}
+    assert expression_files == {} and cn_files == {}
     assert any(m.startswith("no PCAWG cohort for cohort(s) K562") for m in said)
     assert any(m.startswith("no TCGA HiChIP cohort for cohort(s) K562") for m in said)
+    assert any(m.startswith("no PCAWG expression for cohort(s) K562") for m in said)
+    assert any(m.startswith("no PCAWG copy number for cohort(s) K562") for m in said)
+
+
+def test_prepare_layers_expression_and_cn_use_the_sv_cohort_code_and_their_own_catalog(monkeypatch):
+    """`attach(layers=["expression", "cn"], cohort="liver")` resolves through the PCAWG codes the
+    SV layer uses, but only the codes the packaged catalogs list get a table: BOCA-UK has SVs and
+    CN but no RNA-seq, so expression says so instead of attaching nothing silently."""
+    from genogrove_canopy import cli, resources
+    from genogrove_canopy.layers import cn, expression
+
+    monkeypatch.setattr(expression, "cohort_file", lambda code: f"/x/expr/{code}.tsv")
+    monkeypatch.setattr(cn, "cohort_file", lambda code: f"/x/cn/{code}.tsv")
+    said = []
+    cohorts = cli._resolve_cohorts(["LIRI-JP", "BOCA-UK"])
+    *_, expression_files, cn_files = cli.prepare_layers(cohorts, ["expression", "cn"], said.append)
+    assert expression_files == {"LIRI-JP": "/x/expr/LIRI-JP.tsv"}
+    assert cn_files == {"LIRI-JP": "/x/cn/LIRI-JP.tsv", "BOCA-UK": "/x/cn/BOCA-UK.tsv"}
+    assert "BOCA-UK" not in {r["project_code"] for r in resources.expression_cohorts()}
+    # the missing cohort is named even though the other one loaded
+    assert any(m.startswith("no PCAWG expression for cohort(s) BOCA-UK") for m in said)
+    assert not any(m.startswith("no PCAWG copy number") for m in said)
+    # every expression / CN cohort is an SV cohort: the sample ids are the SV layer's
+    sv = {r["project_code"] for r in resources.pcawg_cohorts()}
+    assert {r["project_code"] for r in resources.expression_cohorts()} <= sv
+    assert {r["project_code"] for r in resources.cn_cohorts()} == sv
 
 
 def test_bridge_table_keys_exist_in_both_catalogs():

@@ -26,18 +26,22 @@ from __future__ import annotations
 import inspect
 import json
 
-from genogrove_canopy.layers import enhancers, hichip, sv
+from genogrove_canopy.layers import cn, enhancers, expression, hichip, sv
 
 
 def build(gg: str, cohort_links: dict[str, str] | None = None,
           sv_files: dict[str, str] | None = None,
-          hichip_files: dict[str, str] | None = None, *,
+          hichip_files: dict[str, str] | None = None,
+          expression_files: dict[str, str] | None = None,
+          cn_files: dict[str, str] | None = None, *,
           mutable: bool = False, warm: bool = False) -> str:
     """The preamble for one question. ``cohort_links``: rE2G cohort id -> its links table
     (``enhancers.links_file``); ``sv_files``: PCAWG project code -> its cohort table
     (``sv.cohort_file``); ``hichip_files``: TCGA project -> its loop table
-    (``hichip.cohort_file``). With none, ``GROVE`` is a lazy ``GroveView`` (~200 ms); with
-    any, a mutable ``Grove`` from the memo, with the missing cohorts attached in turn.
+    (``hichip.cohort_file``); ``expression_files`` / ``cn_files``: PCAWG project code -> its
+    expression / copy-number table (``expression.cohort_file`` / ``cn.cohort_file``). With
+    none, ``GROVE`` is a lazy ``GroveView`` (~200 ms); with any, a mutable ``Grove`` from the
+    memo, with the missing cohorts attached in turn.
 
     ``mutable`` is the agent's ``build`` tool: ``GROVE`` is a view over the memoised ``Grove``
     that adds exactly ``insert`` / ``add_edge`` / ``add_external_key``, so the program can put
@@ -49,9 +53,12 @@ def build(gg: str, cohort_links: dict[str, str] | None = None,
     cohorts = sorted(cohort_links or {})
     svs = sorted(sv_files or {})
     loops = sorted(hichip_files or {})
-    if not (cohorts or svs or loops or mutable or warm):  # the worker hands _CANOPY_STATE to every query: hide it here too
+    exprs = sorted(expression_files or {})
+    cns = sorted(cn_files or {})
+    if not (cohorts or svs or loops or exprs or cns or mutable or warm):  # the worker hands _CANOPY_STATE to every query: hide it here too
         return (f"import pygenogrove as pg\nGROVE = pg.GroveView.open({gg_lit})\n"
                 "COHORTS = []\nSV_COHORTS = []\nHICHIP_COHORTS = []\n"
+                "EXPRESSION_COHORTS = []\nCN_COHORTS = []\n"
                 "globals().pop('_CANOPY_STATE', None)\n")
 
     return (
@@ -59,9 +66,11 @@ def build(gg: str, cohort_links: dict[str, str] | None = None,
         f"{inspect.getsource(enhancers.attach_links)}\n"
         f"{inspect.getsource(sv.read_table)}\n"
         f"{inspect.getsource(sv.attach_tracked)}\n"
-        # both layers name their entry point `attach_tracked` (the SV/HiChIP contract); the
-        # HiChIP one is shipped under its own name so the two can coexist in one namespace
+        # every layer names its entry point `attach_tracked` (the SV contract); the others are
+        # shipped under their own names so they can coexist in one namespace
         f"{inspect.getsource(hichip.attach_tracked).replace('def attach_tracked(', 'def attach_loops(', 1)}\n"
+        f"{inspect.getsource(expression.attach_tracked).replace('def attach_tracked(', 'def attach_expression(', 1)}\n"
+        f"{inspect.getsource(cn.attach_tracked).replace('def attach_tracked(', 'def attach_cn(', 1)}\n"
         "_state = globals().get('_CANOPY_STATE')\n"       # absent in one-shot `sandbox.run`
         "if _state is None:\n"
         "    _state = {}\n"
@@ -70,7 +79,8 @@ def build(gg: str, cohort_links: dict[str, str] | None = None,
         # live at once is ~1.8 GB + a ~2 GB deserialize peak against the 4 GiB sandbox cap
         f"    _state.update(gg={gg_lit}, grove=pg.Grove.deserialize({gg_lit}),\n"
         "                  nodes={}, cohorts=set(), sv_cohorts=set(),\n"
-        "                  windows={}, hichip_cohorts=set())\n"
+        "                  windows={}, hichip_cohorts=set(),\n"
+        "                  expression_cohorts=set(), cn_cohorts=set())\n"
         "_grove = _state['grove']\n"
         # A cohort is marked attached only after its attach returned, so an exception halfway
         # would leave a half-mutated grove that the next query attaches onto again: drop the
@@ -90,12 +100,23 @@ def build(gg: str, cohort_links: dict[str, str] | None = None,
         "            with open(_path) as _fh:\n"           # one window cache for every cohort
         "                attach_loops(_grove, read_table(_fh), _state['windows'])\n"
         "            _state['hichip_cohorts'].add(_c)\n"
+        f"    for _c, _path in {json.dumps(sorted((expression_files or {}).items()))}:\n"
+        "        if _c not in _state['expression_cohorts']:\n"
+        "            attach_expression(_grove, _path, _c)\n"
+        "            _state['expression_cohorts'].add(_c)\n"
+        f"    for _c, _path in {json.dumps(sorted((cn_files or {}).items()))}:\n"
+        "        if _c not in _state['cn_cohorts']:\n"
+        "            with open(_path) as _fh:\n"
+        "                attach_cn(_grove, read_table(_fh))\n"
+        "            _state['cn_cohorts'].add(_c)\n"
         "except BaseException:\n"
         "    _state.clear()\n"
         "    raise\n"
         f"COHORTS = {json.dumps(cohorts)}\n"               # this question's cohorts, by layer key
         f"SV_COHORTS = {json.dumps(svs)}\n"
         f"HICHIP_COHORTS = {json.dumps(loops)}\n"
+        f"EXPRESSION_COHORTS = {json.dumps(exprs)}\n"
+        f"CN_COHORTS = {json.dumps(cns)}\n"
         # The memoised grove is a mutable `Grove` shared by every query of the session. Hand the
         # generated code a view that forwards only what a read-only `GroveView` has (plus the
         # count/lookup helpers), so a query cannot insert into it and quietly change the next

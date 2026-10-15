@@ -40,7 +40,8 @@ never drags in an LLM SDK.
   `PYGENOGROVE` build pin.
 - **`gff.py`** — GENCODE GFF3 → the universal `Grove` backbone (genes, transcripts,
   exons, splice-chain edges).
-- **`layers/`** — one module per data layer (`ccres.py`, `enhancers.py`, `sv.py`),
+- **`layers/`** — one module per data layer (`ccres.py`, `enhancers.py`, `sv.py`,
+  `hichip.py`, `expression.py`, `cn.py`),
   each exporting a `LAYER: Layer` descriptor (`_base.py`). `layers/__init__.py`
   collects them into `REGISTRY`, which is the single source of truth the system
   prompt is generated from — adding a layer means adding a module here and
