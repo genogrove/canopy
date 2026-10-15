@@ -73,7 +73,7 @@ def resolve_specimens(rows: list[dict], sv: dict) -> tuple[dict, set]:
     return out, set(own)
 
 
-def _aliquot_map() -> tuple[dict, dict]:
+def _aliquot_map() -> tuple[dict, set, dict]:
     sv = {a: r["project_code"] for r in resources.pcawg_cohorts() for a in r["aliquot_ids"]}
     with open(resources.resolve("pcawg.sample_sheet"), newline="") as fh:
         rows = list(csv.DictReader(fh, delimiter="\t"))

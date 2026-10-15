@@ -228,9 +228,12 @@ def test_prepare_layers_expression_and_cn_use_the_sv_cohort_code_and_their_own_c
     assert any(m.startswith("no PCAWG expression for cohort(s) BOCA-UK") for m in said)
     assert not any(m.startswith("no PCAWG copy number") for m in said)
     # every expression / CN cohort is an SV cohort: the sample ids are the SV layer's
-    sv = {r["project_code"] for r in resources.pcawg_cohorts()}
-    assert {r["project_code"] for r in resources.expression_cohorts()} <= sv
-    assert {r["project_code"] for r in resources.cn_cohorts()} == sv
+    sv = {r["project_code"]: r["n_samples"] for r in resources.pcawg_cohorts()}
+    assert {r["project_code"] for r in resources.expression_cohorts()} <= set(sv)
+    assert {r["project_code"] for r in resources.cn_cohorts()} == set(sv)
+    # and no cohort has more RNA or CN tumours than SV tumours: one column per SV aliquot
+    assert all(r["n_samples"] <= sv[r["project_code"]] for r in resources.expression_cohorts())
+    assert all(r["n_samples"] <= sv[r["project_code"]] for r in resources.cn_cohorts())
 
 
 def test_bridge_table_keys_exist_in_both_catalogs():
