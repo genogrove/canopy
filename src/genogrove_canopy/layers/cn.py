@@ -40,12 +40,12 @@ CN_DIR = resources._CACHE / "cn_cohorts"
 def cohort_file(code: str) -> Path:
     """One PCAWG project's segments as a plain TSV the sandbox can read, extracted once from
     the pinned derived tarball (``pcawg.cn``, one ``<code>.tsv`` per project, built by
-    ``tools/build_pcawg_xena.py``) into ``<cache>/cn_cohorts/<code>.tsv``."""
+    ``tools/build_pcawg_xena.py``) into ``<cache>/cn_cohorts/<pin>/<code>.tsv``."""
     import os
     import shutil
     import tarfile
 
-    dest = (CN_DIR / f"{code}.tsv").resolve()  # resolved: see cli._grove_context
+    dest = (resources.pinned_dir(CN_DIR, "pcawg.cn") / f"{code}.tsv").resolve()  # resolved: see cli._grove_context
     if dest.exists():
         return dest
     if code not in {r["project_code"] for r in resources.cn_cohorts()}:

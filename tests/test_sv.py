@@ -209,10 +209,10 @@ def test_cohort_file_extracts_a_cohorts_samples_into_one_plain_table(tmp_path, m
 
     dest = sv.cohort_file("TEST-XX")
     rows = sv.parse_bedpe(dest)
-    assert dest == (tmp_path / "sv_cohorts" / "TEST-XX.tsv").resolve()
+    assert dest.parent.parent == (tmp_path / "sv_cohorts").resolve() and dest.name == "TEST-XX.tsv"
     assert [(r["sv_id"], r["sample"], r["cohort"]) for r in rows] == [("SV1", "A1", "TEST-XX"), ("SV2", "A2", "TEST-XX")]
     assert set(rows[0]) == set(sv._FIELDS) | {"sample", "cohort"}
-    assert not list((tmp_path / "sv_cohorts").glob("*.tmp"))
+    assert not list((tmp_path / "sv_cohorts").glob("*/*.tmp"))
     with pytest.raises(KeyError):
         sv.cohort_file("NOPE-XX")
 

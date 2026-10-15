@@ -43,12 +43,12 @@ EXPRESSION_DIR = resources._CACHE / "expression_cohorts"
 def cohort_file(code: str) -> Path:
     """One PCAWG project's expression table as a plain TSV the sandbox can read, extracted once
     from the pinned derived tarball (``pcawg.expression``, one ``<code>.tsv`` per project, built
-    by ``tools/build_pcawg_xena.py``) into ``<cache>/expression_cohorts/<code>.tsv``."""
+    by ``tools/build_pcawg_xena.py``) into ``<cache>/expression_cohorts/<pin>/<code>.tsv``."""
     import os
     import shutil
     import tarfile
 
-    dest = (EXPRESSION_DIR / f"{code}.tsv").resolve()  # resolved: see cli._grove_context
+    dest = (resources.pinned_dir(EXPRESSION_DIR, "pcawg.expression") / f"{code}.tsv").resolve()  # resolved: see cli._grove_context
     if dest.exists():
         return dest
     if code not in {r["project_code"] for r in resources.expression_cohorts()}:

@@ -76,7 +76,7 @@ def test_cohort_file_extracts_one_project_from_the_pinned_tarball(monkeypatch, t
                                                             "n_dropped_liftover": 0, "n_dropped_length": 0}])
     monkeypatch.setattr(cn, "CN_DIR", tmp_path / "cn_cohorts")
     out = cn.cohort_file("BRCA-US")
-    assert out == (tmp_path / "cn_cohorts" / "BRCA-US.tsv").resolve()
+    assert out.parent.parent == (tmp_path / "cn_cohorts").resolve() and out.name == "BRCA-US.tsv"
     assert out.read_text().splitlines()[1].endswith("\tS1\tBRCA-US")
     with pytest.raises(KeyError, match="not a PCAWG copy-number cohort"):
         cn.cohort_file("NOPE-XX")

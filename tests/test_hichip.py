@@ -82,7 +82,7 @@ def test_cohort_file_extracts_one_project_from_the_pinned_tarball(monkeypatch, t
     monkeypatch.setattr(resources, "resolve", lambda name: {"tcga.hichip.loops": tgz}[name])
     monkeypatch.setattr(hichip, "HICHIP_DIR", tmp_path / "hichip_cohorts")
     out = hichip.cohort_file("TCGA-KIRC")
-    assert out == (tmp_path / "hichip_cohorts" / "TCGA-KIRC.tsv").resolve()
+    assert out.parent.parent == (tmp_path / "hichip_cohorts").resolve() and out.name == "TCGA-KIRC.tsv"
     assert out.read_text().splitlines()[1].endswith("\tS1\tTCGA-KIRC")
     with pytest.raises(KeyError, match="not a TCGA HiChIP cohort"):
         hichip.cohort_file("TCGA-NOPE")

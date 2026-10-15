@@ -390,6 +390,14 @@ _CACHE = Path(
 )
 
 
+def pinned_dir(root: Path, *names: str) -> Path:
+    """``root/<sha prefix(es)>``: where a layer extracts tables from the pinned tarball(s)
+    ``names``. Keyed by the pins so a re-pin never serves a table extracted under the old one —
+    the extracted-table counterpart of the ``_GROVE_SCHEMA`` rule. Old directories are left
+    behind as a disposable cache."""
+    return root / "-".join(RESOURCES[n].sha256[:12] for n in names)
+
+
 def resolve(name: str) -> Path:
     """Resolve a curated resource to a verified local file path.
 

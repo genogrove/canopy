@@ -75,7 +75,28 @@ def test_cohort_file_extracts_one_project_from_the_pinned_tarball(monkeypatch, t
     monkeypatch.setattr(resources, "expression_cohorts", lambda: [{"project_code": "LIRI-JP", "n_samples": 3, "n_genes": 2}])
     monkeypatch.setattr(expression, "EXPRESSION_DIR", tmp_path / "expression_cohorts")
     out = expression.cohort_file("LIRI-JP")
-    assert out == (tmp_path / "expression_cohorts" / "LIRI-JP.tsv").resolve()
+    assert out.parent.parent == (tmp_path / "expression_cohorts").resolve() and out.name == "LIRI-JP.tsv"
     assert out.read_text().splitlines()[0] == "gene\tchrom\ttss\tA1\tA2\tA3"
     with pytest.raises(KeyError, match="not a PCAWG expression cohort"):
         expression.cohort_file("NOPE-XX")
+
+
+def test_a_re_pin_never_serves_a_table_extracted_under_the_old_pin(monkeypatch, tmp_path):
+    import dataclasses
+    import tarfile
+
+    from genogrove_canopy import resources
+
+    tgz = tmp_path / "expr.tgz"
+    with tarfile.open(tgz, "w:gz") as t:
+        t.add(_table(tmp_path), arcname="LIRI-JP.tsv")
+    monkeypatch.setattr(resources, "resolve", lambda name: {"pcawg.expression": tgz}[name])
+    monkeypatch.setattr(resources, "expression_cohorts", lambda: [{"project_code": "LIRI-JP", "n_samples": 3, "n_genes": 2}])
+    monkeypatch.setattr(expression, "EXPRESSION_DIR", tmp_path / "expression_cohorts")
+    first = expression.cohort_file("LIRI-JP")
+    first.write_text("stale")                      # what a user extracted under the old pin
+    assert expression.cohort_file("LIRI-JP").read_text() == "stale"   # same pin: cached
+    old = resources.RESOURCES["pcawg.expression"]
+    monkeypatch.setitem(resources.RESOURCES, "pcawg.expression", dataclasses.replace(old, sha256="f" * 64))
+    second = expression.cohort_file("LIRI-JP")
+    assert second != first and second.read_text().startswith("gene\tchrom\ttss")   # new pin: re-extracted
