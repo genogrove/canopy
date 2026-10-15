@@ -68,7 +68,9 @@ $ uv run canopy --format json "List the exons of EGFR"
 | Flag | |
 |---|---|
 | `--format text\|bed\|tsv\|json` | Output format. `text` is an aligned table; the rest are machine-readable. |
-| `--show-code` | Print the generated Python before running it. |
+| `--show-code` | Print each program the agent runs, and what came back, as it goes. |
+| `--trace FILE` | Write the full trace — every tool call, its input and output — as JSON. |
+| `--data FILE` | Your own interval file (repeatable). The agent may read it and `build` its records into the grove, then query them like any layer. Nothing else outside the pinned datasets is readable. |
 | `-i, --interactive` | Keep the grove open across questions — the ~200 ms open is paid once, then queries are sub-millisecond. |
 | `--cohort NAME` | Pick the cohort(s) for enhancer, SV and contact questions, overriding what the model read from the question. A tissue word (`breast`, `prostate`) resolves every layer through a curated table; an ENCODE biosample name/id, a PCAWG project code or a TCGA project resolves one. `--list-cohorts` prints all of it. |
 | `--init` | Download the grove now and exit. |
@@ -139,11 +141,22 @@ Given the same question and the same catalog, a run reproduces.
 ## How it works
 
 ```
-  question ──▶ llm.py ──▶ generated Python ──▶ sandbox.py ──▶ answer
-                 ▲                                  │
-                 │  pinned datasets + build         │  no network, allowlisted
-                 └────────── resources.py ──────────┘  imports, resource caps
+  question ──▶ llm.py (agent loop) ──code──▶ sandbox.py ──rows──▶ llm.py ──▶ answer + trace
+                 ▲                              │                    │
+                 │  pinned datasets + build     │  no network,       └── more code, or done
+                 └──────── resources.py ────────┘  allowlisted imports, resource caps
 ```
+
+The model is the agent; the grove is what it acts on. It has three actions, two halves
+of one API: `attach` a pinned cohort's layers into the grove, `build` its own records
+into it (`insert`/`add_edge` from a `--data` file), and `run` a `pygenogrove` program
+against it (`intersect`/`get_neighbors`, read-only). It reads what each run prints, runs
+again if the rows are not yet the answer, and replies in prose when they are; the rows of
+its last run are printed beneath the reply (for `--format json|tsv|bed` the reply goes to
+stderr and stdout stays the rows).
+A hard cap on turns ends a question that does not converge. Every call and its result is
+kept as the trace (`--show-code` as it happens, `--trace FILE` as JSON), which is the
+provenance of the answer.
 
 The generated code is untrusted, so it never runs in-process: `sandbox.py` executes it
 in a separate process with the network blocked, imports allowlisted, filesystem reads

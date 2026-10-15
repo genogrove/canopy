@@ -7,11 +7,12 @@ records table, and a locus view for interval answers) talks to two endpoints on 
 
 * ``GET  /``        — the page
 * ``GET  /cohorts`` — the rE2G cohort list, for the picker
-* ``POST /ask``     — ``{question, cohort}`` → ``{summary, records, code}`` (or ``{error, code}``)
+* ``POST /ask``     — ``{question, cohort}`` → ``{answer, summary, records, code, trace}`` (or
+  ``{error, trace}``)
 
-No web framework: the backend is glue around :mod:`genogrove_canopy.llm` (code-gen) and a warm
-:class:`genogrove_canopy.sandbox.Worker` per cohort selection — the same worker ``--interactive`` uses,
-so the grove ``open`` is paid once per cohort and reused across questions.
+No web framework: the backend is glue around :mod:`genogrove_canopy.llm` (the agent loop) and
+one warm :class:`genogrove_canopy.sandbox.Worker` — the same worker ``--interactive`` uses, so
+the grove ``open`` is paid once and reused across questions.
 """
 
 from __future__ import annotations
@@ -22,14 +23,12 @@ import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from genogrove_canopy import llm, preamble, resources, sandbox
+from genogrove_canopy import llm, resources, sandbox
 from genogrove_canopy.cli import (
     DEFAULT_COHORT,
     DEFAULT_MODEL,
     _BASE,
-    _cohort_ids,
-    _pcawg_codes,
-    prepare_layers,
+    Session,
     _grove_context,
     _parse_output,
     _pygenogrove_site_dir,
@@ -45,11 +44,12 @@ class _Grove:
     attached into ``GROVE`` per question (see :func:`_pipeline`), not baked into the grove.
     """
 
-    def __init__(self, model: str) -> None:
-        block, self.preamble, data_paths = _grove_context()
+    def __init__(self, model: str, own=()) -> None:
+        block, self.preamble, data_paths = _grove_context(own)
         self.gg = data_paths[0]
         self.system_prompt = llm.build_system_prompt(block)
         self.model = model
+        self.warm = bool(own)  # flips for good once a question builds into the grove
         self.worker = sandbox.Worker(
             data_paths=data_paths, extra_syspath=[_pygenogrove_site_dir()]
         )
@@ -68,29 +68,15 @@ _MAX_BODY = 64 * 1024
 def _grove(model: str) -> _Grove:
     global _GROVE
     if _GROVE is None:
-        _GROVE = _Grove(model)
+        _GROVE = _Grove(model, _Handler.data)
     return _GROVE
-
-
-def _serve_cohorts(cohort_override: str, cohort_hint: str, layers):
-    """Grounded per-query cohort: UI picker override → the model's declared cohort → default
-    (enhancer questions only; see ``cli._resolve_query_cohorts``). Returns ``(cohorts, note)``."""
-    if cohort_override:
-        return _resolve_cohorts([cohort_override]), None
-    if cohort_hint:  # `;`-separated, see cli._resolve_query_cohorts
-        try:
-            return _resolve_cohorts([c for c in map(str.strip, cohort_hint.split(";")) if c]), None
-        except SystemExit:
-            return {}, f"no cohort matched {cohort_hint!r} — nothing attached"
-    if "enhancers" in layers:
-        return _resolve_cohorts([DEFAULT_COHORT]), "default"
-    return {}, "SVs are per tumour cohort — name a tissue or pick a cohort; nothing attached"
 
 
 def _pipeline(question: str, cohort: str, model: str, emit) -> dict:
     """Run one question end to end, calling ``emit(kind, msg)`` before each visible step. The UI
-    ``cohort`` is an **override**; otherwise the model's declared cohort (or the default) is used.
-    Returns the result dict (``records``/``summary``/``code``/``note``) or ``{"error", "code"?}``."""
+    ``cohort`` is an **override**; otherwise the model's cohort (or the default) is used.
+    Returns ``{answer, summary, records, code, trace, note}`` — the last run's rows and program,
+    every tool call — or ``{"error", "trace"}``."""
     if not resources._all_grove_gg(_BASE).exists():
         emit("step", "Fetching the grove — first run only: a pinned ~109 MB .gg (genes + cCREs)")
         resources.ensure_all_grove(_BASE)
@@ -98,39 +84,27 @@ def _pipeline(question: str, cohort: str, model: str, emit) -> dict:
     emit("step", "Opening the grove")
     grove = _grove(model)
 
-    emit("step", "Generating the pygenogrove query")
-    cohort_hint, layers, code = llm.generate_query(question, grove.system_prompt, model=grove.model)
+    emit("step", "Asking the model")
+    session = Session(gg=grove.gg, base=grove.preamble, execute=grove.worker.submit,
+                      override=[cohort] if cohort else (), say=lambda m: emit("step", m),
+                      warm=getattr(grove, "warm", False))
 
-    enh_pre, note = "", None
-    if layers:
-        # `why` is the internal reason flag; `note` is display text. Keeping them apart stops the
-        # "default" sentinel leaking to the UI when a cohort resolves but finds no links.
-        cohorts, why = _serve_cohorts(cohort, cohort_hint, layers)
-        note = None if why == "default" else why
-        said = []
-        cohort_links, sv_files, hichip_files = prepare_layers(cohorts, layers, lambda m: (emit("step", m), said.append(m)))
-        if cohort_links or sv_files or hichip_files:
-            enh_pre = preamble.build(grove.gg, cohort_links, sv_files, hichip_files)
-            what = " + ".join(w for w, d in (("enhancers", cohort_links), ("SVs", sv_files),
-                                             ("contacts", hichip_files)) if d)
-            note = f"{what} attached from {'; '.join(cohorts)}" + (
-                " (default)" if why == "default" else "")
-        # a declared layer with nothing to attach is reported, never silently zero
-        gaps = [m for m in said if m.startswith("no ")]
-        if gaps:
-            note = "; ".join(([note] if note else []) + gaps)
-
-    emit("step", "Running the query over the grove")
-    result = grove.worker.submit("import json\n" + (enh_pre or grove.preamble) + code)
-    err = sandbox.result_error(result)
-    if err:
-        return {"error": err, "code": code}
-    records, passthrough = _parse_output(result.stdout)
-    return {"summary": passthrough, "records": records, "code": code, "note": note}
+    def on_turn(entry) -> None:
+        emit("step", {"run": "Running a program over the grove", "build": "Building own data into the grove"}
+             .get(entry["tool"]) or "Attaching " + ", ".join(entry["input"].get("layers") or []))
+    text, trace = llm.answer(question, grove.system_prompt, session, model=grove.model, on_turn=on_turn)
+    grove.warm = getattr(grove, "warm", False) or session.built
+    if not text:
+        return {"error": f"no answer after {len(trace)} tool calls — the turn cap ({llm.MAX_TURNS}) "
+                         "was reached or the reply was cut off", "trace": trace}
+    records, passthrough = _parse_output(session.stdout)
+    return {"answer": text, "summary": passthrough, "records": records, "code": session.code,
+            "trace": trace, "note": "; ".join(session.notes) or None}
 
 
 class _Handler(BaseHTTPRequestHandler):
     model = DEFAULT_MODEL
+    data = ()   # `--data` files, readable by the agent's `build`
 
     def log_message(self, *args) -> None:  # quiet the default per-request stderr spam
         pass
@@ -180,6 +154,12 @@ class _Handler(BaseHTTPRequestHandler):
         if not question:
             self._send(400, json.dumps({"error": "empty question"}), "application/json")
             return
+        if cohort:  # a bad picker value must fail here, not inside the loop after turns were paid for
+            try:
+                _resolve_cohorts([cohort])
+            except SystemExit as exc:
+                self._send(400, json.dumps({"error": str(exc)}), "application/json")
+                return
 
         # Stream newline-delimited JSON: {t:"step"|"tick", msg} events as work progresses,
         # then a final {t:"done", result} (or {t:"error", msg}). HTTP/1.0 close-delimited —
@@ -214,9 +194,12 @@ def main(argv: list[str] | None = None) -> int:
                         help=f"Anthropic model for code generation (default: {DEFAULT_MODEL}).")
     parser.add_argument("--no-browser", action="store_true",
                         help="Do not open a browser window on start.")
+    parser.add_argument("--data", action="append", metavar="FILE", default=[],
+                        help="Your own interval file the agent may read and `build` into the grove (repeatable).")
     args = parser.parse_args(argv)
 
     _Handler.model = args.model
+    _Handler.data = tuple(args.data)
     server = ThreadingHTTPServer((args.host, args.port), _Handler)
     url = f"http://{args.host}:{args.port}"
     print(f"canopy serve — {url}  (Ctrl-C to stop)")
@@ -424,8 +407,8 @@ PAGE = r"""<!doctype html>
   <main id="main">
     <p class="qecho" style="font-weight:600">Ask a question over connected genomic intervals.</p>
     <div class="placeholder">
-      canopy translates plain English to a <span class="mono">pygenogrove</span> query, runs it over the
-      GENCODE grove (plus a chosen enhancer→gene layer), and draws where the answer lands.
+      canopy's agent writes <span class="mono">pygenogrove</span> programs, runs them over the
+      GENCODE grove (plus the layers it attaches), reads what comes back, and answers.
       <span class="ex">
         <code>Which gene contains the variant at chr7:55,191,822?</code>
         <code>Which transcripts have an exon over chr7:55,191,822?</code>
@@ -489,7 +472,7 @@ function renderResult(question, data){
 
   if(data.error){
     status.className = "status err"; status.textContent = data.error;
-    if(data.code) main.appendChild(codePanel(data.code));
+    if(data.trace) main.appendChild(tracePanel(data.trace));
     return;
   }
 
@@ -497,6 +480,9 @@ function renderResult(question, data){
   const records = data.records||[];
   const anchor = parseAnchor(question) || parseAnchor(summary);
 
+  if(data.answer){
+    const a = document.createElement("div"); a.className="summary"; a.textContent=data.answer; main.appendChild(a);
+  }
   if(summary.trim()){
     const s = document.createElement("div"); s.className="summary mono"; s.textContent=summary; main.appendChild(s);
   }
@@ -508,7 +494,7 @@ function renderResult(question, data){
   const hasExon = records.some(r => (r.type||"")==="exon" || (r.type||"")==="intron");
   if(anchor && (hasTx || hasExon)) main.appendChild(zoomBlock(records, anchor));
 
-  if(data.code) main.appendChild(codePanel(data.code));
+  if(data.trace && data.trace.length) main.appendChild(tracePanel(data.trace));
   if(records.length) main.appendChild(tableBlock(records));
   if(!plottable.length && !records.length && !summary.trim())
     { status.textContent = "(no result)"; }
@@ -516,10 +502,16 @@ function renderResult(question, data){
 
 function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
-function codePanel(code){
+// ---- trace: every tool call the agent made, its input and what came back ----
+function tracePanel(trace){
   const d = document.createElement("details"); d.className="code";
-  const s = document.createElement("summary"); s.textContent="Generated pygenogrove code"; d.appendChild(s);
-  const pre = document.createElement("pre"); pre.textContent=code; d.appendChild(pre);
+  const s = document.createElement("summary"); s.textContent=`Trace — ${trace.length} tool call${trace.length===1?"":"s"}`; d.appendChild(s);
+  trace.forEach((t,i)=>{
+    const pre = document.createElement("pre");
+    const input = (t.tool==="run"||t.tool==="build") ? (t.input.code||"") : JSON.stringify(t.input);
+    pre.textContent = `# ${i+1}. ${t.tool}\n${input}\n# → result\n${t.output}`;
+    d.appendChild(pre);
+  });
   return d;
 }
 

@@ -146,7 +146,7 @@ def test_system_prompt_worked_example_runs_against_the_attached_grove(tmp_path):
     from genogrove_canopy.layers import enhancers
 
     md = (Path(enhancers.__file__).parents[1] / "prompts" / "system.md").read_text()
-    m = re.search(r"### Worked example.*?COHORT: breast\nLAYERS: enhancers\n\n```python\n(.*?)```", md, re.S)
+    m = re.search(r'### Worked example.*?attach\(layers=\["enhancers"\], cohort="breast"\)`, then `run`:\n\n```python\n(.*?)```', md, re.S)
     assert m, "worked example not found in system.md"
     example = m.group(1)
 
@@ -225,7 +225,7 @@ def test_system_prompt_sv_example_runs_against_the_attached_grove(tmp_path):
     from genogrove_canopy.layers import sv
 
     md = (Path(sv.__file__).parents[1] / "prompts" / "system.md").read_text()
-    m = re.search(r"### Structural variants.*?COHORT: breast\nLAYERS: sv\n\n```python\n(.*?)```", md, re.S)
+    m = re.search(r'### Structural variants.*?attach\(layers=\["sv"\], cohort="breast"\)`, then `run`:\n\n```python\n(.*?)```', md, re.S)
     assert m, "SV worked example not found in system.md"
 
     g = pg.Grove(order=100)
@@ -308,7 +308,7 @@ def test_hichip_worked_example_merges_by_partner_window_and_counts_tumours(tmp_p
     from genogrove_canopy.layers import hichip
 
     md = (Path(hichip.__file__).parents[1] / "prompts" / "system.md").read_text()
-    m = re.search(r"### Chromatin contacts \(HiChIP\).*?COHORT: breast\nLAYERS: hichip\n\n```python\n(.*?)```", md, re.S)
+    m = re.search(r'### Chromatin contacts \(HiChIP\).*?attach\(layers=\["hichip"\], cohort="breast"\)`, then `run`:\n\n```python\n(.*?)```', md, re.S)
     assert m, "HiChIP worked example not found in system.md"
 
     g = pg.Grove(order=100)

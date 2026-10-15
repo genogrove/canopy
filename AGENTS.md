@@ -12,10 +12,10 @@ bindings, runs that generated code in a sandboxed subprocess, and prints the ans
 There is no compile step for this repo itself.
 
 ```
-  question ──▶ llm.py ──▶ generated Python ──▶ sandbox.py ──▶ answer
-                 ▲                                  │
-                 │  pinned datasets + build         │  no network, allowlisted
-                 └────────── resources.py ──────────┘  imports, resource caps
+  question ──▶ llm.py (agent loop) ──code──▶ sandbox.py ──rows──▶ llm.py ──▶ answer + trace
+                 ▲                              │                    │
+                 │  pinned datasets + build     │  no network,       └── more code, or done
+                 └──────── resources.py ────────┘  allowlisted imports, resource caps
 ```
 
 Dependency direction is one-way — `canopy → pygenogrove` — so `pip install pygenogrove`
@@ -24,9 +24,11 @@ never drags in an LLM SDK.
 ## Key modules
 
 - **`cli.py`** — thin argument-parsing wrapper around the pipeline below.
-- **`llm.py`** — Anthropic codegen: builds the prompt from `prompts/system.md` +
-  the layer catalogue, sends the question, parses cohort/target declarations and
-  the generated Python out of the reply.
+- **`llm.py`** — the agent loop over the Anthropic API: builds the prompt from
+  `prompts/system.md` + the layer catalogue, gives the model three tools (`attach` a
+  cohort's layers, `build` own data into the grove, `run` a program), feeds each result back, and stops when the model
+  answers without a tool call or hits `MAX_TURNS`. The host side of the tools is
+  `cli.Session`; the trace of every call is the answer's provenance.
 - **`sandbox.py`** — **security-critical.** Runs untrusted, LLM-generated code in a
   separate process: network blocked, imports allowlisted, filesystem reads
   restricted to pinned dataset paths, wall-clock/memory/output caps enforced.

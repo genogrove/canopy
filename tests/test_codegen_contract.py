@@ -43,6 +43,28 @@ def test_every_advertised_method_reaches_the_model() -> None:
     assert "Read-only" in block
 
 
+def test_prompt_names_only_allowlisted_modules() -> None:
+    """Every module the system prompt imports in a code fence, or names in backticks as a thing
+    to use, must be importable in the sandbox. The prompt once told the model to parse own files
+    "with `csv`" — a module the allowlist excludes by name — so the first own-data turn burned
+    on ``ImportError``. The prompt is the contract; the allowlist is the enforcement; they must
+    agree."""
+    import importlib.util
+    import re
+    from pathlib import Path
+
+    from genogrove_canopy import llm, sandbox
+
+    md = Path(llm.__file__).with_name("prompts").joinpath("system.md").read_text()
+    imported = {m.group(1).split(".")[0]
+                for m in re.finditer(r"^\s*(?:import|from)\s+([\w.]+)", md, re.M)}
+    # a backticked word that resolves to an importable module is a module the prompt recommends
+    named = {w for w in set(re.findall(r"`(\w+)`", md))
+             if w not in ("GROVE",) and importlib.util.find_spec(w) is not None}
+    bad = sorted((imported | named) - set(sandbox.ALLOWED_IMPORTS))
+    assert not bad, f"system.md names modules the sandbox blocks: {bad}"
+
+
 def test_resources_block_interpolates_its_arguments() -> None:
     """Guards the inverse: a block that ignored its inputs would make the test above vacuous."""
     block = resources_block("MY_VAR", "MY_DESCRIPTION", "MY_LAYERS")

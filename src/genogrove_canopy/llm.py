@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Code generation via the Anthropic API.
+"""The agent loop, via the Anthropic API.
 
-Given a natural-language question, ask Claude to emit Python that drives
-``pygenogrove`` to compute the answer. The model is given the ``pygenogrove`` API
-surface, the grove model, and the curated resource context (see
-:mod:`genogrove_canopy.resources`) via the system prompt in ``prompts/system.md``.
+Given a natural-language question, the model drives a ``pygenogrove`` grove through the tools
+the host provides — ``attach`` (put a pinned cohort's layers into the grove), ``build`` (run a
+program that inserts its own data into the grove) and ``run`` (execute a query program against
+it) — reads what comes back, and calls again or answers. The system prompt in
+``prompts/system.md`` is its API contract; the resource context (see
+:mod:`genogrove_canopy.resources`) is injected into it.
 
 The generated code is untrusted: it must only ever run through :mod:`genogrove_canopy.sandbox`,
-never ``exec``'d here.
+never ``exec``'d here. The host-side tool handlers (``cli.Session``) do exactly that.
 """
 
 from __future__ import annotations
@@ -17,15 +19,24 @@ from pathlib import Path
 
 DEFAULT_MODEL = "claude-opus-4-8"
 
+#: Hard cap on model turns per question. The model gets this many replies; a reply with no tool
+#: call is the answer. Running out means abstain — the trace says what was tried.
+MAX_TURNS = 8
+
+#: How much of a tool's output the model reads: the first lines, then a count of the rest. The
+#: host keeps and renders the full output; the model needs the shape and a sample, not 256 KB
+#: of rows resent on every later turn.
+HEAD_LINES = 100
+
 _SYSTEM_MD = Path(__file__).with_name("prompts") / "system.md"
 
-#: The per-question layers the host knows how to attach (see `cli.prepare_layers`).
-_LAYERS = frozenset(("enhancers", "sv", "hichip"))
+#: The per-question layers the host knows how to attach (see `cli.Session.attach`).
+_LAYERS = ("enhancers", "sv", "hichip")
 
-#: Ways a model spells "no biosample" instead of omitting the line as system.md asks. Normalised
-#: to "" so the host doesn't hand a placeholder to the ENCODE catalog. This is deliberately
-#: permissive: canopy is meant to be model-agnostic, and treating one vendor's phrasing as the
-#: only valid one would score every other model down for a formatting habit, not a capability.
+#: Ways a model spells "no biosample" instead of leaving the cohort empty. Normalised to "" so
+#: the host doesn't hand a placeholder to the ENCODE catalog. Deliberately permissive: canopy is
+#: model-agnostic, and treating one vendor's phrasing as the only valid one would score every
+#: other model down for a formatting habit, not a capability.
 _NO_COHORT = frozenset((
     "", "none", "n/a", "na", "null", "nil", "-", "--",
     "unspecified", "not specified", "not applicable",
@@ -33,9 +44,69 @@ _NO_COHORT = frozenset((
 # The system prompt's runtime-injected datasets block (the TODO placeholder).
 _RESOURCES_HEADING = "## Available resources"
 
+#: The agent's action space: what the model can do to the grove, and nothing else.
+TOOLS = [
+    {
+        "name": "attach",
+        "description": (
+            "Attach a cohort's per-question layers into GROVE before querying them: rE2G "
+            "enhancer->gene links, PCAWG structural variants and/or TCGA HiChIP contacts. "
+            "Returns what is now attached and the COHORTS / SV_COHORTS / HICHIP_COHORTS your "
+            "code must filter on. Call it once per cohort set; the grove keeps what it holds."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "layers": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": list(_LAYERS)},
+                    "description": "Exactly the layers the question needs.",
+                },
+                "cohort": {
+                    "type": "string",
+                    "description": (
+                        "The tissue / disease / cell line the question implies, as one of the "
+                        "terms under 'Available resources'; several `;`-separated for a "
+                        "comparison. Empty if the question names none."
+                    ),
+                },
+            },
+            "required": ["layers"],
+        },
+    },
+    {
+        "name": "build",
+        "description": (
+            "Run one program with GROVE **mutable** (insert, add_edge, add_external_key) to put "
+            "your own data into the grove — the user's files listed under 'Available resources', "
+            "read with open(path). What you insert stays for the session, like an attached "
+            "cohort; the next `run` queries it. Returns the program's stdout (or the error). Not "
+            "for querying: print only what you need to confirm the build."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"code": {"type": "string", "description": "The Python program."}},
+            "required": ["code"],
+        },
+    },
+    {
+        "name": "run",
+        "description": (
+            "Run one self-contained pygenogrove program against GROVE (read-only) in the sandbox "
+            "and return its stdout (or the error). Print records as the Rules say; read them; "
+            "run again or answer."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"code": {"type": "string", "description": "The Python program."}},
+            "required": ["code"],
+        },
+    },
+]
+
 
 def build_system_prompt(resources_block: str) -> str:
-    """The codegen system prompt: ``system.md`` with the resources block injected.
+    """The system prompt: ``system.md`` with the resources block injected.
 
     ``resources_block`` replaces the placeholder under "Available resources" — it
     names the variables holding each dataset path and what they are. The generated
@@ -47,84 +118,89 @@ def build_system_prompt(resources_block: str) -> str:
     return f"{head}{_RESOURCES_HEADING}\n\n{resources_block.strip()}\n"
 
 
-def generate_query(question: str, system_prompt: str, *, model: str = DEFAULT_MODEL, on_usage=None):
-    """Translate ``question`` into ``pygenogrove`` Python via Claude.
+def answer(question: str, system_prompt: str, tools, *, model: str = DEFAULT_MODEL,
+           max_turns: int = MAX_TURNS, on_turn=None, on_usage=None):
+    """Answer ``question`` by letting the model drive ``tools`` until it replies without one.
 
-    Returns ``(cohort, layers, code)``: ``cohort`` is the tissue/cohort term(s) the model read
-    from the question (``""`` if none named; ``;``-separated if several; the host resolves it
-    against the catalogs and attaches those cohorts into the grove before running ``code``),
-    ``layers`` the per-question layers it declared (``LAYERS: enhancers; sv``; a non-empty
-    ``TARGETS`` counts as ``enhancers``), empty for a plain structural question. ``code`` is the
-    generated Python. The caller runs it through the
-    sandbox; nothing is executed here. Raises ``RuntimeError`` if the model declines.
+    ``tools`` is the host side of :data:`TOOLS`: an object with ``attach(layers, cohort="")``,
+    ``build(code)`` and ``run(code)``, each returning the text the model reads next
+    (``cli.Session``). Nothing is executed here.
 
-    ``on_usage``, if given, is called with the response's ``usage`` object before parsing — a
-    side channel for cost accounting (a benchmark harness, not part of the package) that keeps the return shape stable for
-    ``cli``/``serve``, which don't care. A callback rather than module state because ``serve``
-    answers questions on multiple threads.
+    Returns ``(text, trace)``: ``text`` is the model's final reply, ``""`` if it ran out of
+    turns or was cut off by ``max_tokens`` (abstain); ``trace`` is every tool call in order as
+    ``{"tool", "input", "output"}`` — the provenance of the answer, with the full output; the
+    model itself reads at most :data:`HEAD_LINES` of each. ``on_turn(entry)`` is called as each
+    is made. ``on_usage`` receives each response's ``usage`` (cost accounting for a benchmark
+    harness, not the package). Raises ``RuntimeError`` if the model declines.
     """
     import anthropic  # lazy: keeps the module importable without the SDK/key
 
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
-    response = client.messages.create(
-        model=model,
-        max_tokens=16000,  # room for adaptive thinking + a small program; non-streaming-safe
-        thinking={"type": "adaptive"},
-        system=system_prompt,
-        messages=[{"role": "user", "content": question}],
-    )
-    if on_usage is not None:
-        on_usage(response.usage)
-    if response.stop_reason == "refusal":
-        raise RuntimeError("the model declined to answer this question")
-    text = "".join(b.text for b in response.content if b.type == "text")
-    return parse_targets_and_code(text)
+    messages = [{"role": "user", "content": question}]
+    trace = []
+    for _ in range(max_turns):
+        response = client.messages.create(
+            model=model,
+            max_tokens=16000,  # room for adaptive thinking + a program; non-streaming-safe
+            thinking={"type": "adaptive"},
+            # cached: the contract + catalogue is large and identical on every turn and question
+            system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+            tools=TOOLS,
+            messages=messages,
+        )
+        if on_usage is not None:
+            on_usage(response.usage)
+        if response.stop_reason == "refusal":
+            raise RuntimeError("the model declined to answer this question")
+        if response.stop_reason == "max_tokens":  # cut mid-thought: a truncated reply is not an answer
+            return "", trace
+        messages.append({"role": "assistant", "content": response.content})
+        calls = [b for b in response.content if b.type == "tool_use"]
+        if not calls:
+            return "".join(b.text for b in response.content if b.type == "text").strip(), trace
+        results = []
+        for call in calls:
+            try:
+                output = _dispatch(tools, call.name, call.input)
+            except Exception as exc:  # a layer fetch failing, a bad file: the model gets to react
+                output = f"error: {type(exc).__name__}: {exc}"
+            entry = {"tool": call.name, "input": call.input, "output": output}
+            trace.append(entry)
+            if on_turn is not None:
+                on_turn(entry)
+            results.append({"type": "tool_result", "tool_use_id": call.id, "content": _head(output),
+                            "is_error": output.startswith("error:")})
+        messages.append({"role": "user", "content": results})
+    return "", trace
 
 
-def parse_targets_and_code(text: str):
-    """Split the model's reply into ``(cohort, layers, code)``.
+def _head(text: str, lines: int = HEAD_LINES) -> str:
+    """The first ``lines`` of a tool output, with a count of what was left out."""
+    parts = text.splitlines()
+    if len(parts) <= lines:
+        return text
+    return "\n".join(parts[:lines]) + f"\n… {len(parts) - lines} more lines (the host keeps and renders them all)"
 
-    ``cohort`` comes from an optional ``COHORT: <term(s)>`` line, ``layers`` from an optional
-    ``LAYERS: enhancers; sv`` line (a non-empty legacy ``TARGETS: [...]`` also means
-    ``enhancers``); both outside the code fence; absent/malformed → ``""`` / ``[]``.
-    ``code`` is the fenced program (or the text as-is)."""
-    import json
 
-    cohort = ""
-    # Horizontal whitespace only: `\s` matches newlines, so `COHORT:\s*(.+?)` would step over a
-    # bare `COHORT:` line (the correct declaration for a question naming no biosample) and capture
-    # the *following* line — reading the cohort as "TARGETS:" and sending that to the catalog.
-    mc = re.search(r"^[ \t]*COHORT:[ \t]*(.+?)[ \t]*$", text, re.MULTILINE)
-    if mc:
-        cohort = mc.group(1).strip().strip("\"'").strip("()").strip()
+def _dispatch(tools, name: str, args: dict) -> str:
+    """Route one tool call to the host, normalising what a model may send: a fenced program, a
+    placeholder cohort, a layer the host doesn't have."""
+    if name in ("run", "build"):
+        return getattr(tools, name)(_strip_code_fence(str(args.get("code", ""))))
+    if name == "attach":
+        cohort = str(args.get("cohort") or "").strip().strip("\"'")
         if cohort.lower() in _NO_COHORT:
             cohort = ""
-
-    layers = []
-    ml = re.search(r"^[ \t]*LAYERS:[ \t]*(.+?)[ \t]*$", text, re.MULTILINE)
-    if ml:  # only the layers the host can attach; anything else would trigger an empty resolve
-        layers = [w for w in (x.strip().lower() for x in re.split(r"[;,]", ml.group(1))) if w in _LAYERS]
-    # `TARGETS: [...]` was the earlier way to say "this is an enhancer question"; its content
-    # (genes/regions) is not used — a whole cohort is attached — so it is just `enhancers` now.
-    mt = re.search(r"^\s*TARGETS:\s*(\[.*?\])\s*$", text, re.MULTILINE | re.DOTALL)
-    if mt and mt.group(1).strip() != "[]" and "enhancers" not in layers:
-        layers.append("enhancers")
-
-    code = _strip_code_fence(text)
-    # Defensive: strip any COHORT:/TARGETS: declaration lines that leaked into the program body
-    # (e.g. the model fenced them with the code). `COHORT: MCF-7` is a valid Python annotation
-    # that would NameError at runtime, so never let it reach the sandbox.
-    code = "\n".join(ln for ln in code.splitlines()
-                     if not re.match(r"\s*(COHORT|TARGETS|LAYERS)\s*:", ln)).strip() + "\n"
-    return cohort, layers, code
+        layers = [w for w in (str(x).strip().lower() for x in args.get("layers") or []) if w in _LAYERS]
+        return tools.attach(layers, cohort)
+    return f"error: unknown tool {name!r}"
 
 
 def _strip_code_fence(text: str) -> str:
-    """Return the Python program from the model's reply.
+    """Return the Python program from a reply or tool input.
 
-    Prefer an explicit ```python fence (so a bare ``` block holding the COHORT/TARGETS
-    declarations is never mistaken for the program); else the last ``` block; else the text
-    as-is. system.md asks for one ```python fence, but be robust to variation.
+    Prefer an explicit ```python fence; else the last ``` block; else the text as-is. The tool
+    takes bare code, but be robust to a model that fences it anyway.
     """
     m = re.search(r"```python\n(.*?)```", text, re.DOTALL)
     if not m:
