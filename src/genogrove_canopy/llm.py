@@ -20,7 +20,7 @@ DEFAULT_MODEL = "claude-opus-4-8"
 _SYSTEM_MD = Path(__file__).with_name("prompts") / "system.md"
 
 #: The per-question layers the host knows how to attach (see `cli.prepare_layers`).
-_LAYERS = frozenset(("enhancers", "sv"))
+_LAYERS = frozenset(("enhancers", "sv", "hichip"))
 
 #: Ways a model spells "no biosample" instead of omitting the line as system.md asks. Normalised
 #: to "" so the host doesn't hand a placeholder to the ENCODE catalog. This is deliberately

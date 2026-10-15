@@ -111,22 +111,26 @@ def _bridge() -> list[dict]:
         r["aliases"] = [a for a in r["aliases"].split(";") if a]
         r["re2g"] = [r["re2g"]] if r["re2g"] else []
         r["pcawg"] = [c for c in r["pcawg"].split(",") if c]
+        r["hichip"] = [c for c in r["hichip"].split(",") if c]
     return rows
 
 
 def _resolve_cohorts(specs):
     """Map cohort specs (``--cohort`` values or the model's ``COHORT:`` terms) to per-layer keys:
-    ``{label: {"re2g": [ontology ids], "pcawg": [project codes]}}``.
+    ``{label: {"re2g": [ontology ids], "pcawg": [project codes], "hichip": [TCGA projects]}}``.
 
     Each spec resolves, in order, as: a layer key as written (an rE2G ontology id, a PCAWG
-    project code); an exact rE2G biosample name (a bridge row for the same word adds its PCAWG
-    codes); a bridge term or alias (``data/cohorts.tsv`` — one tissue word gives both layers'
-    keys, which is what lets one ``COHORT:`` line drive enhancers *and* SVs); or a
-    case-insensitive substring of an rE2G biosample name (most-replicated match wins). Raises
-    ``SystemExit`` with a pointer to ``--list-cohorts`` on no match.
+    project code, a TCGA project); an exact rE2G biosample name (a bridge row for the same word
+    adds its PCAWG codes and TCGA projects); a bridge term or alias (``data/cohorts.tsv`` — one
+    tissue word gives every layer's keys, which is what lets one ``COHORT:`` line drive
+    enhancers, SVs *and* contacts); or a case-insensitive substring of an rE2G biosample name
+    (most-replicated match wins). Raises ``SystemExit`` with a pointer to ``--list-cohorts`` on
+    no match.
     """
     catalog = resources.re2g_cohorts()
     pcawg = {r["project_code"] for r in resources.pcawg_cohorts()}
+    hichip = {r["project_code"] for r in resources.hichip_cohorts()}
+    none = {"re2g": [], "pcawg": [], "hichip": []}
     chosen = {}
     for spec in specs:
         s = spec.strip().lower()
@@ -134,35 +138,39 @@ def _resolve_cohorts(specs):
             raise SystemExit("canopy: empty cohort — see --list-cohorts")
         hit = next((c for c in catalog if c["ontology_id"].lower() == s), None)
         if hit:
-            chosen[hit["name"]] = {"re2g": [hit["ontology_id"]], "pcawg": []}
+            chosen[hit["name"]] = {**none, "re2g": [hit["ontology_id"]]}
             continue
         if spec.strip().upper() in pcawg:
-            chosen[spec.strip().upper()] = {"re2g": [], "pcawg": [spec.strip().upper()]}
+            chosen[spec.strip().upper()] = {**none, "pcawg": [spec.strip().upper()]}
+            continue
+        if spec.strip().upper() in hichip:
+            chosen[spec.strip().upper()] = {**none, "hichip": [spec.strip().upper()]}
             continue
         exact = next((c for c in catalog if c["name"].strip().lower() == s), None)
         row = next((r for r in _bridge() if s == r["term"] or s in (a.lower() for a in r["aliases"])), None)
         if exact:  # a bridge row for the same word names this very biosample (tested), so its
-            chosen[exact["name"]] = {"re2g": [exact["ontology_id"]],  # PCAWG codes come along
-                                     "pcawg": row["pcawg"] if row else []}
+            chosen[exact["name"]] = {"re2g": [exact["ontology_id"]],  # tumour cohorts come along
+                                     "pcawg": row["pcawg"] if row else [],
+                                     "hichip": row["hichip"] if row else []}
             continue
         if row:
-            chosen[row["term"]] = {"re2g": row["re2g"], "pcawg": row["pcawg"]}
+            chosen[row["term"]] = {"re2g": row["re2g"], "pcawg": row["pcawg"], "hichip": row["hichip"]}
             continue
         hit = next((c for c in catalog if s in c["name"].lower()), None)
         if hit is None:
             raise SystemExit(f"canopy: no cohort matches {spec!r} — see --list-cohorts")
-        chosen[hit["name"]] = {"re2g": [hit["ontology_id"]], "pcawg": []}
+        chosen[hit["name"]] = {**none, "re2g": [hit["ontology_id"]]}
     return chosen
 
 
 def _list_cohorts() -> None:
     """Print what ``--cohort`` / ``COHORT:`` can name: the tissue terms that drive both layers,
     then each layer's own keys (rE2G biosamples most-replicated first, PCAWG project codes)."""
-    print("# tissue terms (data/cohorts.tsv) — one word resolves both layers")
-    print(f"{'term':14}  {'rE2G':14}  {'PCAWG':32}  aliases")
+    print("# tissue terms (data/cohorts.tsv) — one word resolves every layer")
+    print(f"{'term':14}  {'rE2G':14}  {'PCAWG':32}  {'HiChIP':20}  aliases")
     for r in _bridge():
         print(f"{r['term']:14}  {(r['re2g'] or ['-'])[0]:14}  {','.join(r['pcawg']) or '-':32}  "
-              f"{'; '.join(r['aliases'])}")
+              f"{','.join(r['hichip']) or '-':20}  {'; '.join(r['aliases'])}")
     print("\n# ENCODE-rE2G biosamples (enhancers)")
     print(f"{'ontology id':16}  {'reps':>4}  {'type':16}  name")
     for c in resources.re2g_cohorts():
@@ -171,6 +179,10 @@ def _list_cohorts() -> None:
     print(f"{'code':10}  {'samples':>7}  {'SVs':>7}")
     for r in resources.pcawg_cohorts():
         print(f"{r['project_code']:10}  {r['n_samples']:>7}  {r['n_svs']:>7}")
+    print("\n# TCGA projects (H3K27ac HiChIP contacts)")
+    print(f"{'project':10}  {'samples':>7}  {'loops':>8}")
+    for r in resources.hichip_cohorts():
+        print(f"{r['project_code']:10}  {r['n_samples']:>7}  {r['n_loops']:>8}")
 
 
 def _grove_context():
@@ -187,7 +199,7 @@ def _grove_context():
     generated code never opens a path itself.
     """
     from genogrove_canopy import layers
-    from genogrove_canopy.layers import enhancers, sv
+    from genogrove_canopy.layers import enhancers, hichip, sv
 
     # Resolved: the sandbox compares every read against `Path.resolve()`d roots, so a symlinked
     # cache dir spelled two ways would refuse its own grove.
@@ -195,13 +207,15 @@ def _grove_context():
     # Landlock grants directories by inode; create layer roots before the worker starts.
     enhancers.LINKS_DIR.mkdir(parents=True, exist_ok=True)
     sv.SV_DIR.mkdir(parents=True, exist_ok=True)
+    hichip.HICHIP_DIR.mkdir(parents=True, exist_ok=True)
     block = resources_block(
         "GROVE", resources.RESOURCES[_BASE].description,
-        layers.catalogue_block(["ccre", "enhancers", "sv"]),
+        layers.catalogue_block(["ccre", "enhancers", "sv", "hichip"]),
     )
     # The sandbox reads only these roots. `LINKS_DIR` is where `enhancers.preamble`'s
     # `attach_links` opens a cohort's links table, so it must be granted alongside the grove.
-    return block, preamble.build(gg), [gg, str(enhancers.LINKS_DIR.resolve()), str(sv.SV_DIR.resolve())]
+    return block, preamble.build(gg), [gg, str(enhancers.LINKS_DIR.resolve()), str(sv.SV_DIR.resolve()),
+                                       str(hichip.HICHIP_DIR.resolve())]
 
 
 def resources_block(var: str, description: str, layers_block: str) -> str:
@@ -215,8 +229,9 @@ def resources_block(var: str, description: str, layers_block: str) -> str:
     return (
         f"- `{var}`: an **open** grove handle ({description}) — gene/transcript/exon structure "
         f"**plus the ENCODE cCRE nodes**, and, when you declare `COHORT`/`LAYERS` (see "
-        f"\"Per-question layers\"), that cohort's rE2G enhancer nodes/edges and/or PCAWG "
-        f"breakpoint edges, attached by the host before your code runs. Query `{var}` directly. "
+        f"\"Per-question layers\"), that cohort's rE2G enhancer nodes/edges, PCAWG "
+        f"breakpoint edges and/or TCGA HiChIP contact windows and edges, attached by the host "
+        f"before your code runs. Query `{var}` directly. "
         f"**Never open a path yourself** — a handle you "
         f"open lacks the attached layer. A **located** query (a variant at chr7:55191822) reads "
         f"just that locus; a **genome-wide / gene-name** query works from the same handle. "
@@ -227,7 +242,8 @@ def resources_block(var: str, description: str, layers_block: str) -> str:
         f"- `COHORT:` terms that resolve both layers (data/cohorts.tsv): "
         f"{', '.join(r['term'] for r in _bridge())}. A plain tissue word means the tissue "
         f"biosample for enhancers; the disease word ('liver cancer', 'HCC') means the cancer cell "
-        f"line. An ENCODE biosample name/id or a PCAWG project code resolves one layer directly.\n"
+        f"line. An ENCODE biosample name/id, a PCAWG project code or a TCGA project (TCGA-BRCA) "
+        f"resolves one layer directly.\n"
     )
 
 
@@ -394,18 +410,18 @@ def _resolve_query_cohorts(args, cohort_hint, layers):
             return {}, f"no cohort matched {cohort_hint!r} — nothing attached (see --list-cohorts)"
     if "enhancers" in layers:
         return _resolve_cohorts([DEFAULT_COHORT]), "default"
-    return {}, "SVs are per tumour cohort — name a tissue or pass --cohort; nothing attached"
+    return {}, "SVs and contacts are per tumour cohort — name a tissue or pass --cohort; nothing attached"
 
 
 def prepare_layers(cohorts, layers, say):
     """Materialise the declared ``layers`` for the resolved ``cohorts`` (host side, shared by
-    the CLI and ``serve``): returns ``(cohort_links, sv_files)`` for ``preamble.build``.
-    ``say(text)`` reports progress and, per declared layer that has **no** key in these
-    cohorts, says so — the generated code would otherwise run with an empty ``COHORTS`` /
-    ``SV_COHORTS`` and print a plausible-looking zero."""
-    from genogrove_canopy.layers import enhancers, sv
+    the CLI and ``serve``): returns ``(cohort_links, sv_files, hichip_files)`` for
+    ``preamble.build``. ``say(text)`` reports progress and, per declared layer that has **no**
+    key in these cohorts, says so — the generated code would otherwise run with an empty
+    ``COHORTS`` / ``SV_COHORTS`` / ``HICHIP_COHORTS`` and print a plausible-looking zero."""
+    from genogrove_canopy.layers import enhancers, hichip, sv
 
-    cohort_links, sv_files = {}, {}
+    cohort_links, sv_files, hichip_files = {}, {}, {}
     names = "; ".join(cohorts)
     if "enhancers" in layers:
         ids = _cohort_ids(cohorts)
@@ -423,7 +439,14 @@ def prepare_layers(cohorts, layers, say):
             sv_files = {c: str(sv.cohort_file(c)) for c in codes}
         elif cohorts:
             say(f"no PCAWG cohort for cohort(s) {names} — no SVs attached")
-    return cohort_links, sv_files
+    if "hichip" in layers:
+        codes = _hichip_codes(cohorts)
+        if codes:
+            say(f"Loading TCGA HiChIP loops — cohort(s) {'; '.join(codes)}")
+            hichip_files = {c: str(hichip.cohort_file(c)) for c in codes}
+        elif cohorts:
+            say(f"no TCGA HiChIP cohort for cohort(s) {names} — no contacts attached")
+    return cohort_links, sv_files, hichip_files
 
 
 def _prepare() -> None:
@@ -442,6 +465,11 @@ def _cohort_ids(cohorts) -> list:
 def _pcawg_codes(cohorts) -> list:
     """The PCAWG project codes across the resolved ``cohorts`` (the SV cohort unit)."""
     return [i for c in cohorts.values() for i in c["pcawg"]]
+
+
+def _hichip_codes(cohorts) -> list:
+    """The TCGA projects across the resolved ``cohorts`` (the HiChIP cohort unit)."""
+    return [i for c in cohorts.values() for i in c["hichip"]]
 
 
 
@@ -473,12 +501,13 @@ def _answer(question, *, system_prompt, base, gg, args, execute):
         if note and note != "default":
             log.say(note)
         t_enh = time.perf_counter()
-        cohort_links, sv_files = prepare_layers(cohorts, layers, log.say)
+        cohort_links, sv_files, hichip_files = prepare_layers(cohorts, layers, log.say)
         enh_s = time.perf_counter() - t_enh
-        if cohort_links or sv_files:
-            enh_pre = preamble.build(gg, cohort_links, sv_files)
+        if cohort_links or sv_files or hichip_files:
+            enh_pre = preamble.build(gg, cohort_links, sv_files, hichip_files)
             src = " (default — name a tissue or pass --cohort)" if note == "default" else ""
-            what = " + ".join(w for w, d in (("rE2G", cohort_links), ("SV", sv_files)) if d)
+            what = " + ".join(w for w, d in (("rE2G", cohort_links), ("SV", sv_files),
+                                             ("HiChIP", hichip_files)) if d)
             log.took(f"{what}: attached {'; '.join(cohorts)}{src}", enh_s)
     # JSONL is the output contract, so guarantee `json` is importable even if the
     # generated code forgets the import (it's already in the allowlist).

@@ -108,10 +108,11 @@ def _pipeline(question: str, cohort: str, model: str, emit) -> dict:
         cohorts, why = _serve_cohorts(cohort, cohort_hint, layers)
         note = None if why == "default" else why
         said = []
-        cohort_links, sv_files = prepare_layers(cohorts, layers, lambda m: (emit("step", m), said.append(m)))
-        if cohort_links or sv_files:
-            enh_pre = preamble.build(grove.gg, cohort_links, sv_files)
-            what = " + ".join(w for w, d in (("enhancers", cohort_links), ("SVs", sv_files)) if d)
+        cohort_links, sv_files, hichip_files = prepare_layers(cohorts, layers, lambda m: (emit("step", m), said.append(m)))
+        if cohort_links or sv_files or hichip_files:
+            enh_pre = preamble.build(grove.gg, cohort_links, sv_files, hichip_files)
+            what = " + ".join(w for w, d in (("enhancers", cohort_links), ("SVs", sv_files),
+                                             ("contacts", hichip_files)) if d)
             note = f"{what} attached from {'; '.join(cohorts)}" + (
                 " (default)" if why == "default" else "")
         # a declared layer with nothing to attach is reported, never silently zero

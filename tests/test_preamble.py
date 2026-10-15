@@ -12,7 +12,7 @@ def test_preamble_no_cohorts_opens_lazily():
     pre = preamble.build("/tmp/x.gg")
     assert pre == ('import pygenogrove as pg\n'
                     'GROVE = pg.GroveView.open("/tmp/x.gg")\nCOHORTS = []\nSV_COHORTS = []\n'
-                    "globals().pop('_CANOPY_STATE', None)\n")
+                    "HICHIP_COHORTS = []\nglobals().pop('_CANOPY_STATE', None)\n")
     compile(pre, "<preamble>", "exec")
 
 
@@ -28,7 +28,7 @@ def test_preamble_with_cohorts_attaches_each_onto_one_grove():
     compile(pre, "<preamble>", "exec")
 
 
-def _run_preamble(cohort_links, state, events, sv_files=None):
+def _run_preamble(cohort_links, state, events, sv_files=None, hichip_files=None):
     """Execute the cohort preamble against stub bindings; returns the namespace generated code
     would see. `events` records deserialize / attach / clear calls in order."""
 
@@ -46,12 +46,14 @@ def _run_preamble(cohort_links, state, events, sv_files=None):
         "Grove": type("G", (), {"deserialize": staticmethod(
             lambda p: events.append("deser") or _Grove())}),
         "GroveView": _GroveView})
-    pre = preamble.build("/tmp/x.gg", cohort_links, sv_files)
+    pre = preamble.build("/tmp/x.gg", cohort_links, sv_files, hichip_files)
     body = pre.split("import pygenogrove as pg\n", 1)[1].replace(
         "            attach_links(_grove, _path, _c, _state['nodes'])",
         "            events.append(('attach', _c, id(_state['nodes'])))").replace(
         "            with open(_path) as _fh:\n                attach_tracked(_grove, read_table(_fh))",
-        "            events.append(('sv', _c)) or _fail(_c)")
+        "            events.append(('sv', _c)) or _fail(_c)").replace(
+        "            with open(_path) as _fh:\n                attach_loops(_grove, read_table(_fh), _state['windows'])",
+        "            events.append(('hichip', _c, id(_state['windows'])))")
     def _fail(c):
         if c == "BAD":
             raise ValueError("malformed row")
@@ -88,6 +90,13 @@ def test_preamble_grows_the_warm_grove_one_cohort_at_a_time():
     g = _run_preamble({"C": "/tmp/c.tsv"}, state, events, {"BRCA-US": "/tmp/brca.tsv"})
     assert events == [("sv", "BRCA-US")]                         # an SV cohort joins the same grove
     assert state["sv_cohorts"] == {"BRCA-US"} and g["SV_COHORTS"] == ["BRCA-US"]
+
+    events.clear()
+    g = _run_preamble({"C": "/tmp/c.tsv"}, state, events, None, {"TCGA-BRCA": "/tmp/loops.tsv"})
+    assert events == [("hichip", "TCGA-BRCA", id(state["windows"]))]   # one window cache, shared
+    assert state["hichip_cohorts"] == {"TCGA-BRCA"} and g["HICHIP_COHORTS"] == ["TCGA-BRCA"]
+    g = _run_preamble({"C": "/tmp/c.tsv"}, state, events, None, {"TCGA-BRCA": "/tmp/loops.tsv"})
+    assert events == [("hichip", "TCGA-BRCA", id(state["windows"]))]   # memo hit: not re-attached
 
     events.clear()
     state["gg"] = "/tmp/other.gg"                                # a different grove path

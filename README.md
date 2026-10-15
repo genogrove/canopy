@@ -70,7 +70,7 @@ $ uv run canopy --format json "List the exons of EGFR"
 | `--format text\|bed\|tsv\|json` | Output format. `text` is an aligned table; the rest are machine-readable. |
 | `--show-code` | Print the generated Python before running it. |
 | `-i, --interactive` | Keep the grove open across questions — the ~200 ms open is paid once, then queries are sub-millisecond. |
-| `--cohort NAME` | Pick the cohort(s) for enhancer and SV questions, overriding what the model read from the question. A tissue word (`breast`, `prostate`) resolves both layers through a curated table; an ENCODE biosample name/id or a PCAWG project code resolves one. `--list-cohorts` prints all of it. |
+| `--cohort NAME` | Pick the cohort(s) for enhancer, SV and contact questions, overriding what the model read from the question. A tissue word (`breast`, `prostate`) resolves every layer through a curated table; an ENCODE biosample name/id, a PCAWG project code or a TCGA project resolves one. `--list-cohorts` prints all of it. |
 | `--init` | Download the grove now and exit. |
 
 There is also a local web front end over the same pipeline:
@@ -81,7 +81,7 @@ $ uv run canopy serve
 
 ## What you can ask about
 
-One grove, queried through one handle, holds four layers:
+One grove, queried through one handle, holds five layers:
 
 - **Gene structure** — GENCODE v50: genes, transcripts and exons, with `contains` and
   `first_exon`/`next` splice-chain edges, and CDS ranges on each exon. Only genes are
@@ -104,6 +104,12 @@ One grove, queried through one handle, holds four layers:
   after liftover. Junction geometry does not establish copy-number change or diagnose
   chromothripsis/chromoplexy. The pinned PCAWG calls contain no insertions, although the
   attachment API supports insertion payloads.
+- **Chromatin contacts** — H3K27ac HiChIP loops from 69 primary TCGA tumours (Chang lab,
+  Nature Genetics 2025; GRCh38, FitHiChIP q ≤ 0.1), attached per question by tumour cohort
+  (15 TCGA projects, e.g. `TCGA-BRCA`). A loop is one `contact_edge` per tumour between two
+  10 kb windows, inserted as indexed `hichip_anchor` nodes on first use. No edge joins a
+  window to a gene or cCRE: what a window overlaps is a spatial query, in both directions,
+  and a window is the unit of evidence — nothing finer than 10 kb is asserted.
 
 Enhancer answers carry a `ccre_overlap` list rather than a single class: most rE2G
 windows span several cCREs, and about a third span cCREs of differing classes, so
