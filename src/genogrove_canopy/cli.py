@@ -610,8 +610,11 @@ def _answer(question, *, system_prompt, base, gg, args, execute, warm=False):
     text, trace = llm.answer(question, system_prompt, session, model=args.model,
                              on_turn=_show_turn if args.show_code else None)
     took = time.perf_counter() - t0
-    if args.trace:
-        Path(args.trace).write_text(json.dumps({"question": question, "answer": text, "trace": trace}, indent=1))
+    if args.trace:  # the trace must never cost the answer the model turns already paid for
+        try:
+            Path(args.trace).write_text(json.dumps({"question": question, "answer": text, "trace": trace}, indent=1))
+        except OSError as exc:
+            print(f"canopy: --trace {args.trace}: {exc}", file=sys.stderr)
     if not text:
         return "", (f"no answer after {len(trace)} tool calls — the turn cap ({llm.MAX_TURNS}) "
                     "was reached or the reply was cut off"), trace, took, session.built

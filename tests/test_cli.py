@@ -144,7 +144,7 @@ def test_answer_renders_the_models_reply_over_the_last_rows(monkeypatch, tmp_pat
         def __init__(self, out):
             self.stdout = out
     row = '{"chrom": "chr8", "start": 1, "end": 2, "name": "MYC"}\n'
-    outs = iter([row, row, row, ""])
+    outs = iter([row, row, row, row, ""])
 
     def fake_answer(question, system_prompt, session, **kw):
         session.run("a()\n")
@@ -156,6 +156,10 @@ def test_answer_renders_the_models_reply_over_the_last_rows(monkeypatch, tmp_pat
     out, err, trace, _, built = cli._answer("q", system_prompt="", base="", gg="/x.gg", args=args, execute=execute)
     assert err == "" and out.startswith("MYC it is.\n\n") and "MYC" in out.splitlines()[-1] and not built
     assert json.loads((tmp_path / "t.json").read_text())["trace"] == trace
+    args.trace = str(tmp_path / "no-such-dir" / "t.json")   # an unwritable trace path never costs the answer
+    out, err, *_ = cli._answer("q", system_prompt="", base="", gg="/x.gg", args=args, execute=execute)
+    assert out.startswith("MYC it is.") and err == "" and "--trace" in capsys.readouterr().err
+    args.trace = str(tmp_path / "t.json")
     args.format = "json"
     out, err, *_ = cli._answer("q", system_prompt="", base="", gg="/x.gg", args=args, execute=execute)
     assert json.loads(out)["name"] == "MYC" and "MYC it is." in capsys.readouterr().err
