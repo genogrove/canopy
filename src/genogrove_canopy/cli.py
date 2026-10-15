@@ -199,6 +199,14 @@ def _list_cohorts() -> None:
     print(f"{'project':10}  {'samples':>7}  {'loops':>8}")
     for r in resources.hichip_cohorts():
         print(f"{r['project_code']:10}  {r['n_samples']:>7}  {r['n_loops']:>8}")
+    print("\n# PCAWG project codes (gene expression, RNA-seq on SV tumours)")
+    print(f"{'code':10}  {'samples':>7}  {'genes':>7}")
+    for r in resources.expression_cohorts():
+        print(f"{r['project_code']:10}  {r['n_samples']:>7}  {r['n_genes']:>7}")
+    print("\n# PCAWG project codes (consensus copy number, GRCh38)")
+    print(f"{'code':10}  {'samples':>7}  {'segments':>9}")
+    for r in resources.cn_cohorts():
+        print(f"{r['project_code']:10}  {r['n_samples']:>7}  {r['n_segments']:>9}")
 
 
 def _grove_context(own=()):
@@ -216,27 +224,26 @@ def _grove_context(own=()):
     generated code never opens a path itself.
     """
     from genogrove_canopy import layers
-    from genogrove_canopy.layers import enhancers, hichip, sv
+    from genogrove_canopy.layers import cn, enhancers, expression, hichip, sv
 
     # Resolved: the sandbox compares every read against `Path.resolve()`d roots, so a symlinked
     # cache dir spelled two ways would refuse its own grove.
     gg = str(resources.ensure_all_grove(_BASE).resolve())
     # Landlock grants directories by inode; create layer roots before the worker starts.
-    enhancers.LINKS_DIR.mkdir(parents=True, exist_ok=True)
-    sv.SV_DIR.mkdir(parents=True, exist_ok=True)
-    hichip.HICHIP_DIR.mkdir(parents=True, exist_ok=True)
+    roots = [enhancers.LINKS_DIR, sv.SV_DIR, hichip.HICHIP_DIR, expression.EXPRESSION_DIR, cn.CN_DIR]
+    for d in roots:
+        d.mkdir(parents=True, exist_ok=True)
     own = [str(Path(p).resolve()) for p in own]
     for p in own:
         if not Path(p).is_file():
             raise SystemExit(f"canopy: --data {p}: not a file")
     block = resources_block(
         "GROVE", resources.RESOURCES[_BASE].description,
-        layers.catalogue_block(["ccre", "enhancers", "sv", "hichip"]), own,
+        layers.catalogue_block(["ccre", "enhancers", "sv", "hichip", "expression", "cn"]), own,
     )
     # The sandbox reads only these roots. `LINKS_DIR` is where `enhancers.preamble`'s
     # `attach_links` opens a cohort's links table, so it must be granted alongside the grove.
-    return block, preamble.build(gg), [gg, str(enhancers.LINKS_DIR.resolve()), str(sv.SV_DIR.resolve()),
-                                       str(hichip.HICHIP_DIR.resolve()), *own]
+    return block, preamble.build(gg), [gg, *(str(d.resolve()) for d in roots), *own]
 
 
 def resources_block(var: str, description: str, layers_block: str, own=()) -> str:
@@ -251,7 +258,8 @@ def resources_block(var: str, description: str, layers_block: str, own=()) -> st
         f"- `{var}`: an **open** grove handle ({description}) — gene/transcript/exon structure "
         f"**plus the ENCODE cCRE nodes**, and, when you call `attach` (see "
         f"\"Per-question layers\"), that cohort's rE2G enhancer nodes/edges, PCAWG "
-        f"breakpoint edges and/or TCGA HiChIP contact windows and edges, attached by the host "
+        f"breakpoint edges, TCGA HiChIP contact windows and edges, PCAWG expression nodes "
+        f"and/or PCAWG copy-number segments, attached by the host "
         f"before your next `run`. Query `{var}` directly. "
         f"**Never open a path yourself** — a handle you "
         f"open lacks the attached layer. A **located** query (a variant at chr7:55191822) reads "
@@ -441,13 +449,13 @@ def _resolve_query_cohorts(override, cohort_hint, layers):
 
 def prepare_layers(cohorts, layers, say):
     """Materialise the declared ``layers`` for the resolved ``cohorts`` (host side, shared by
-    the CLI and ``serve``): returns ``(cohort_links, sv_files, hichip_files)`` for
-    ``preamble.build``. ``say(text)`` reports progress and, per declared layer that has **no**
-    key in these cohorts, says so — the generated code would otherwise run with an empty
-    ``COHORTS`` / ``SV_COHORTS`` / ``HICHIP_COHORTS`` and print a plausible-looking zero."""
-    from genogrove_canopy.layers import enhancers, hichip, sv
+    the CLI and ``serve``): returns ``(cohort_links, sv_files, hichip_files, expression_files,
+    cn_files)`` for ``preamble.build``. ``say(text)`` reports progress and, per declared layer
+    that has **no** key in these cohorts, says so — the generated code would otherwise run with
+    an empty ``COHORTS`` / ``SV_COHORTS`` / … and print a plausible-looking zero."""
+    from genogrove_canopy.layers import cn, enhancers, expression, hichip, sv
 
-    cohort_links, sv_files, hichip_files = {}, {}, {}
+    cohort_links, sv_files, hichip_files, expression_files, cn_files = {}, {}, {}, {}, {}
     names = "; ".join(cohorts)
     if "enhancers" in layers:
         ids = _cohort_ids(cohorts)
@@ -472,7 +480,21 @@ def prepare_layers(cohorts, layers, say):
             hichip_files = {c: str(hichip.cohort_file(c)) for c in codes}
         elif cohorts:
             say(f"no TCGA HiChIP cohort for cohort(s) {names} — no contacts attached")
-    return cohort_links, sv_files, hichip_files
+    # Expression and copy number share the SV layer's cohort unit (PCAWG project code) but not
+    # every SV cohort has RNA-seq or consensus CN: the packaged catalogs say which do.
+    for layer, mod, files, known, what in (
+        ("expression", expression, expression_files, {r["project_code"] for r in resources.expression_cohorts()}, "expression"),
+        ("cn", cn, cn_files, {r["project_code"] for r in resources.cn_cohorts()}, "copy number"),
+    ):
+        if layer not in layers:
+            continue
+        codes = [c for c in _pcawg_codes(cohorts) if c in known]
+        if codes:
+            say(f"Loading PCAWG {what} — cohort(s) {'; '.join(codes)}")
+            files.update({c: str(mod.cohort_file(c)) for c in codes})
+        elif cohorts:
+            say(f"no PCAWG {what} for cohort(s) {names} — no {what} attached")
+    return cohort_links, sv_files, hichip_files, expression_files, cn_files
 
 
 def _prepare() -> None:
@@ -518,6 +540,7 @@ class Session:
     def __init__(self, *, gg, base, execute, override=(), say=log.say, warm=False):
         self.gg, self.base, self.execute, self.override, self.say = gg, base, execute, list(override), say
         self.cohort_links, self.sv_files, self.hichip_files = {}, {}, {}
+        self.expression_files, self.cn_files = {}, {}
         self.notes = []         # what was attached / what was missing, for the UI
         self.stdout = ""        # the last successful run's output — the rows under the answer
         self.code = ""          # the last program run
@@ -535,14 +558,17 @@ class Session:
             self.say(note)
             self.notes.append(note)
             said.append(note)
-        links, svs, loops = prepare_layers(cohorts, layers, lambda m: (self.say(m), said.append(m)))
+        links, svs, loops, exprs, cns = prepare_layers(cohorts, layers, lambda m: (self.say(m), said.append(m)))
         self.notes += [m for m in said if m.startswith("no ")]
         self.cohort_links.update(links)
         self.sv_files.update(svs)
         self.hichip_files.update(loops)
+        self.expression_files.update(exprs)
+        self.cn_files.update(cns)
         attached = []
-        if links or svs or loops:
-            what = " + ".join(w for w, d in (("enhancers", links), ("SVs", svs), ("contacts", loops)) if d)
+        if links or svs or loops or exprs or cns:
+            what = " + ".join(w for w, d in (("enhancers", links), ("SVs", svs), ("contacts", loops),
+                                             ("expression", exprs), ("copy number", cns)) if d)
             attached.append(f"{what} attached from {'; '.join(cohorts)}"
                             + (" (default — the question named no tissue)" if note == "default" else ""))
             self.notes.append(attached[-1])
@@ -550,12 +576,17 @@ class Session:
             f"COHORTS = {json.dumps(sorted(self.cohort_links))}",
             f"SV_COHORTS = {json.dumps(sorted(self.sv_files))}",
             f"HICHIP_COHORTS = {json.dumps(sorted(self.hichip_files))}",
+            f"EXPRESSION_COHORTS = {json.dumps(sorted(self.expression_files))}",
+            f"CN_COHORTS = {json.dumps(sorted(self.cn_files))}",
         ])
 
+    @property
+    def _files(self):
+        return self.cohort_links, self.sv_files, self.hichip_files, self.expression_files, self.cn_files
+
     def _preamble(self, mutable=False) -> str:
-        if self.cohort_links or self.sv_files or self.hichip_files or self.built or mutable:
-            return preamble.build(self.gg, self.cohort_links, self.sv_files, self.hichip_files,
-                                  mutable=mutable, warm=self.built)
+        if any(self._files) or self.built or mutable:
+            return preamble.build(self.gg, *self._files, mutable=mutable, warm=self.built)
         return self.base
 
     def _execute(self, code, mutable=False):

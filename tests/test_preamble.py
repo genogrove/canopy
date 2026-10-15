@@ -12,7 +12,8 @@ def test_preamble_no_cohorts_opens_lazily():
     pre = preamble.build("/tmp/x.gg")
     assert pre == ('import pygenogrove as pg\n'
                     'GROVE = pg.GroveView.open("/tmp/x.gg")\nCOHORTS = []\nSV_COHORTS = []\n'
-                    "HICHIP_COHORTS = []\nglobals().pop('_CANOPY_STATE', None)\n")
+                    "HICHIP_COHORTS = []\nEXPRESSION_COHORTS = []\nCN_COHORTS = []\n"
+                    "globals().pop('_CANOPY_STATE', None)\n")
     compile(pre, "<preamble>", "exec")
 
 

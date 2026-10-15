@@ -310,6 +310,55 @@ RESOURCES: dict[str, Resource] = {
     # the two originals above and re-hosted. No re-thresholding, no lifting; only FitHiChIP's
     # per-bin QC columns are dropped. A rebuild reproduces the tables byte for byte but not the
     # tarball (tar stores mtimes), so the pin is this upload, not "whatever the script writes".
+    # PCAWG expression and copy number from the UCSC Xena PCAWG hub (open access; the hub serves
+    # the same S3 object it has since 2021-01-27, pinned here by sha256 like the GDC/ICGC
+    # originals above). Build inputs for `tools/build_pcawg_xena.py`, never read at query time.
+    "pcawg.rnaseq.xena": Resource(
+        name="pcawg.rnaseq.xena",
+        url="https://pcawg.xenahubs.net/download/tophat_star_fpkm_uq.v2_aliquot_gl.sp.log",
+        sha256="9d05d6950f7325af43e2cd0cb03cef01079e0ad64db967167d67009fc70772c3",
+        filename="pcawg_rnaseq_fpkm_uq_log2.sp.tsv",
+        description="PCAWG-3 gene expression, TopHat2+STAR averaged FPKM-UQ, log2(x+0.001), "
+                    "GENCODE v19 genes x 1,521 specimens (Xena, 2017-01-18), 683 MB.",
+    ),
+    "pcawg.cn.xena.hg19": Resource(
+        name="pcawg.cn.xena.hg19",
+        url="https://pcawg.xenahubs.net/download/20170119_final_consensus_copynumber_sp",
+        sha256="1ec3084db61b142d1622f73d8434794c6771efdc0a0b2aa45edc212d5f0e60a4",
+        filename="pcawg_consensus_cn_sp.hg19.tsv",
+        description="PCAWG-11 consensus copy-number segments (total/major/minor, star), hg19, "
+                    "969,002 segments (Xena, 2017-01-19), 38 MB (liftover input).",
+    ),
+    # The *derived* artifacts the `expression` and `cn` layers read at query time: one
+    # `<project_code>.tsv` per PCAWG project, written by `tools/build_pcawg_xena.py` from the two
+    # Xena originals above and re-hosted. Expression keeps GENCODE v50 genes only and names each
+    # tumour by its WGS aliquot id (the SV layer's sample id); copy number is lifted to GRCh38
+    # with the SV layer's chain file. A rebuild reproduces the tables but not the tarball (tar
+    # stores mtimes), so the pin is this upload, not "whatever the script writes".
+    "pcawg.expression": Resource(
+        name="pcawg.expression",
+        url=(
+            "https://huggingface.co/datasets/genogrove/canopy/resolve/"
+            "f9e633d96b0ab194d7da223917eb9860f4b4c39b"
+            "/layers/genomic/pcawg-expression/pcawg_rnaseq_fpkm_uq_log2.by_cohort.tgz"
+        ),
+        sha256="82d04e7b84b2e412445a2cd860740e85dd159ef833e8df88a1b45712eec776f5",
+        filename="pcawg_rnaseq_fpkm_uq_log2.by_cohort.tgz",
+        description="PCAWG-3 RNA-seq expression (log2 FPKM-UQ), one table per ICGC project, "
+                    "1,007 tumours in 26 projects, 51,223 GENCODE v50 genes, keyed by WGS aliquot.",
+    ),
+    "pcawg.cn": Resource(
+        name="pcawg.cn",
+        url=(
+            "https://huggingface.co/datasets/genogrove/canopy/resolve/"
+            "1bbefee076eabb1b3a1d9f8f40f490d56067ca4b"
+            "/layers/genomic/pcawg-cn/pcawg_consensus_cn.hg38.by_cohort.tgz"
+        ),
+        sha256="5a2c3d050e33a9c8c88af1867e7c1785f0811e8856068d658e99434ed4017b0b",
+        filename="pcawg_consensus_cn.hg38.by_cohort.tgz",
+        description="PCAWG-11 consensus copy-number segments lifted to GRCh38, one table per ICGC "
+                    "project, 2,748 tumours in 47 projects, 827,894 segments.",
+    ),
     "tcga.hichip.loops": Resource(
         name="tcga.hichip.loops",
         url=(
@@ -792,6 +841,37 @@ def hichip_cohorts() -> list[dict]:
         rows = list(csv.DictReader(fh, delimiter="\t"))
     for r in rows:
         r["n_samples"], r["n_loops"] = int(r["n_samples"]), int(r["n_loops"])
+    return rows
+
+
+_EXPRESSION_COHORTS = Path(__file__).parent / "data" / "expression_cohorts.tsv"
+_CN_COHORTS = Path(__file__).parent / "data" / "cn_cohorts.tsv"
+
+
+@lru_cache(maxsize=1)
+def expression_cohorts() -> list[dict]:
+    """The PCAWG expression cohorts (ICGC project codes with RNA-seq on an SV tumour) from the
+    packaged catalog, written by ``tools/build_pcawg_xena.py``: ``n_samples``, ``n_genes``."""
+    import csv
+
+    with _EXPRESSION_COHORTS.open(newline="") as fh:
+        rows = list(csv.DictReader(fh, delimiter="\t"))
+    for r in rows:
+        r["n_samples"], r["n_genes"] = int(r["n_samples"]), int(r["n_genes"])
+    return rows
+
+
+@lru_cache(maxsize=1)
+def cn_cohorts() -> list[dict]:
+    """The PCAWG copy-number cohorts from the packaged catalog, written by
+    ``tools/build_pcawg_xena.py``: ``n_samples``, ``n_segments``, ``n_dropped_liftover``."""
+    import csv
+
+    with _CN_COHORTS.open(newline="") as fh:
+        rows = list(csv.DictReader(fh, delimiter="\t"))
+    for r in rows:
+        for k in ("n_samples", "n_segments", "n_dropped_liftover"):
+            r[k] = int(r[k])
     return rows
 
 

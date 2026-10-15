@@ -285,18 +285,23 @@ pg.__genogrove_version__       # underlying C++ engine version
 
 ## Per-question layers (attach what you need)
 
-Three layers are **cohort-specific** and therefore not in the pinned grove: ENCODE-rE2G
+Five layers are **cohort-specific** and therefore not in the pinned grove: ENCODE-rE2G
 enhancer→gene predictions (an element is an enhancer in one biosample and silent in another),
-PCAWG structural variants (one tumour cohort's rearrangements) and TCGA H3K27ac HiChIP
-contacts (one tumour cohort's chromatin loops). The host attaches a cohort's data **into
-`GROVE`** when you call `attach`, as first-class nodes and edges (see the `enhancers`, `sv` and
-`hichip` layers under "Available resources"). Call it before the `run` that needs them:
+PCAWG structural variants (one tumour cohort's rearrangements), TCGA H3K27ac HiChIP contacts
+(one tumour cohort's chromatin loops), PCAWG gene expression (RNA-seq per tumour) and PCAWG
+consensus copy number (segments per tumour). The host attaches a cohort's data **into
+`GROVE`** when you call `attach`, as first-class nodes and edges (see the `enhancers`, `sv`,
+`hichip`, `expression` and `cn` layers under "Available resources"). Call it before the `run`
+that needs them:
 
 ```
 attach(layers=["enhancers"], cohort="breast")        # regulation / enhancer questions
 attach(layers=["sv"], cohort="breast")               # structural rearrangement questions
 attach(layers=["hichip"], cohort="breast")           # 3D contact / looping questions
+attach(layers=["expression"], cohort="liver")        # is a gene expressed / up / down in tumours
+attach(layers=["cn"], cohort="liver")                # amplified / deleted / copy-neutral
 attach(layers=["enhancers", "sv"], cohort="liver")   # "did a rearrangement move an enhancer of MYC"
+attach(layers=["sv", "expression", "cn"], cohort="liver")  # carriers vs non-carriers, CN as confounder
 attach(layers=["enhancers"], cohort="K562; HepG2")   # several cohorts, for a comparison
 ```
 
@@ -311,13 +316,15 @@ attach(layers=["enhancers"], cohort="K562; HepG2")   # several cohorts, for a co
   HiChIP cohort, tens of seconds). Without an `attach`, `GROVE` holds no enhancer, SV or
   contact data at all. The result tells you what is attached now; attach again if a later
   step needs another layer or cohort.
-- **`COHORTS` (rE2G biosample ids), `SV_COHORTS` (PCAWG project codes) and `HICHIP_COHORTS`
-  (TCGA projects), all defined for you, name the cohorts this question is about, and you must
-  filter on them.** In an interactive session the grove keeps every cohort attached for
-  earlier questions, so a `byCohort` map or an edge's `cohort` can belong to a cohort nobody
-  asked about now. Enhancers: keep `{c: v for c, v in m["byCohort"].items() if c in COHORTS}`
-  and drop links where that is empty. SVs: keep edges with `m["cohort"] in SV_COHORTS`.
-  Contacts: keep edges with `m["cohort"] in HICHIP_COHORTS`.
+- **`COHORTS` (rE2G biosample ids), `SV_COHORTS` (PCAWG project codes), `HICHIP_COHORTS`
+  (TCGA projects), `EXPRESSION_COHORTS` and `CN_COHORTS` (PCAWG project codes), all defined
+  for you, name the cohorts this question is about, and you must filter on them.** In an
+  interactive session the grove keeps every cohort attached for earlier questions, so a
+  `byCohort` map or an edge's `cohort` can belong to a cohort nobody asked about now.
+  Enhancers: keep `{c: v for c, v in m["byCohort"].items() if c in COHORTS}` and drop links
+  where that is empty. SVs: keep edges with `m["cohort"] in SV_COHORTS`. Contacts: keep edges
+  with `m["cohort"] in HICHIP_COHORTS`. Expression nodes: `d["cohort"] in EXPRESSION_COHORTS`.
+  Copy-number segments: `d["cohort"] in CN_COHORTS`.
 
 ### Enhancers
 
@@ -593,6 +600,109 @@ for p, loops in partners.values():
 rows.sort(key=lambda r: (-r["n_samples"], r["distance"]))
 print(f"MYC contacts in {', '.join(HICHIP_COHORTS)} ({len(rows)} partner windows in "
       f"{len({s for r in rows for s in r['samples']})} tumours):")
+for row in rows:
+    print(json.dumps(row))
+```
+
+### Gene expression (PCAWG RNA-seq)
+
+What the attached layer looks like in `GROVE` — a **payload** on the gene, not an interval:
+
+```python
+# one graph-only node per gene per cohort, hung off the gene node (never returned by intersect):
+{"type": "expression", "source": "PCAWG-RNAseq", "cohort": "<PCAWG project code>", "gene": "ENSG…",
+ "unit": "log2(fpkm-uq+0.001)", "values": {"<WGS aliquot id>": 6.03, ...}}
+# edges: gene -> node {"rel": "expressed", "cohort": ..}; node -> gene {"rel": "expression_of", "cohort": ..}
+```
+
+- From a gene: `[t for t, m in g.get_edge_list(gene) if m and m["rel"] == "expressed" and
+  m["cohort"] in EXPRESSION_COHORTS]` gives its expression node(s); `t.data["values"]` the
+  tumours. `values` is keyed by the **same aliquot id** the SV layer puts on
+  `breakpoint_edge.sample` and the copy-number layer on `cn_segment.sample`, so the three join
+  on it: carriers of a rearrangement are a set of sample ids from the SV edges, and their
+  expression is a dict lookup. A tumour with SVs but no RNA-seq is simply absent from `values`
+  — say how many carriers had expression, never fill in.
+- Values are log2(FPKM-UQ + 0.001): −10 is unexpressed, ~0–3 low, >5 high. Compare groups by
+  **median and group sizes**, and emit both groups as rows; do not compute a p-value unless the
+  question asks and you implement the test yourself in the program.
+- Copy number is the first confounder of any expression gain: if `cn` is attached too, report
+  the carriers' `total_cn` under the gene next to their expression (see "Copy number").
+
+Worked example — "Is TERT expressed higher in liver tumours whose TERT locus is rearranged?" —
+first `attach(layers=["sv", "expression"], cohort="liver")`, then `run`:
+
+```python
+import pygenogrove as pg
+
+g = GROVE
+tert = next(k for k in g.intersect(pg.GenomicCoordinate("*", 1_253_147, 1_253_147), "chr5")
+            if k.data.get("type") == "gene" and k.data.get("name") == "TERT")
+carriers = {m["sample"] for _, m in g.get_edge_list(tert)
+            if m and m["rel"] == "breakpoint_edge" and m["cohort"] in SV_COHORTS}
+rows = []
+for node, m in g.get_edge_list(tert):
+    if not m or m["rel"] != "expressed" or m["cohort"] not in EXPRESSION_COHORTS:
+        continue
+    values = node.data["values"]
+    groups = {"carriers": [v for s, v in values.items() if s in carriers],
+              "non-carriers": [v for s, v in values.items() if s not in carriers]}
+    for group, vals in groups.items():
+        vals.sort()
+        rows.append({"chrom": "chr5", "start": tert.value.start, "end": tert.value.end,
+                     "type": "expression", "name": f"TERT:{group}", "gene": "TERT",
+                     "cohort": m["cohort"], "group": group, "n": len(vals),
+                     "median": vals[len(vals) // 2] if vals else None,
+                     "unit": node.data["unit"]})
+print(f'TERT expression in {", ".join(EXPRESSION_COHORTS)} ({len(carriers)} rearranged tumours, '
+      f'{len(rows)} groups):')
+for row in rows:
+    print(json.dumps(row))
+```
+
+### Copy number (PCAWG consensus)
+
+What the attached layer looks like in `GROVE` — segments are **intervals**, one per segment per
+tumour, indexed like genes and cCREs:
+
+```python
+{"type": "cn_segment", "source": "PCAWG-consensus-CN", "sample": "<WGS aliquot id>",
+ "cohort": "<PCAWG project code>", "total_cn": 4, "major_cn": 3, "minor_cn": 1, "star": 3}
+```
+
+- The copy number of a gene in a tumour is the segment(s) under its span **for that sample**:
+  `intersect(pg.GenomicCoordinate("*", gene.value.start, gene.value.end), chrom)` filtered on
+  `type == "cn_segment"` and `cohort in CN_COHORTS`, then grouped by `sample`. A gene that
+  spans a breakpoint has two segments in that tumour — report both, never average them.
+- `total_cn` is the clonal total copy number (2 = neutral in a diploid tumour; the consensus
+  is ploidy-adjusted per tumour, so compare to the tumour's other segments, not to 2 alone).
+  `major_cn`/`minor_cn` are allele-specific; `minor_cn == 0` is loss of heterozygosity. `star`
+  is the consensus confidence (3 best). Any of them is `null` where the consensus could not
+  call the segment — skip those, never read a null as 0.
+- No edge joins a segment to a gene: overlap is always a spatial query. Segments tile the
+  genome, so a point query returns one segment per tumour that has one there.
+
+Worked example — "What is the copy number of MYC across breast tumours?" — first
+`attach(layers=["cn"], cohort="breast")`, then `run`:
+
+```python
+import pygenogrove as pg
+
+g = GROVE
+myc = next(k for k in g.intersect(pg.GenomicCoordinate("*", 127_735_433, 127_735_433), "chr8")
+           if k.data.get("type") == "gene" and k.data.get("name") == "MYC")
+span = pg.GenomicCoordinate("*", myc.value.start, myc.value.end)
+segments = [k for k in g.intersect(span, "chr8")
+            if k.data.get("type") == "cn_segment" and k.data["cohort"] in CN_COHORTS
+            and k.data["total_cn"] is not None]
+rows = [{"chrom": "chr8", "start": k.value.start, "end": k.value.end, "type": "cn_segment",
+         "name": f'MYC:{k.data["sample"]}', "sample": k.data["sample"], "cohort": k.data["cohort"],
+         "total_cn": k.data["total_cn"], "major_cn": k.data["major_cn"],
+         "minor_cn": k.data["minor_cn"], "star": k.data["star"]}
+        for k in segments]
+rows.sort(key=lambda r: (-r["total_cn"], r["sample"], r["start"]))
+tumours = {r["sample"] for r in rows}
+print(f'MYC copy number in {", ".join(CN_COHORTS)} ({len(tumours)} tumours, '
+      f'{sum(1 for r in rows if r["total_cn"] >= 4)} segments at >= 4 copies):')
 for row in rows:
     print(json.dumps(row))
 ```

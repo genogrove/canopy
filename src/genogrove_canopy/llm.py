@@ -31,7 +31,7 @@ HEAD_LINES = 100
 _SYSTEM_MD = Path(__file__).with_name("prompts") / "system.md"
 
 #: The per-question layers the host knows how to attach (see `cli.Session.attach`).
-_LAYERS = ("enhancers", "sv", "hichip")
+_LAYERS = ("enhancers", "sv", "hichip", "expression", "cn")
 
 #: Ways a model spells "no biosample" instead of leaving the cohort empty. Normalised to "" so
 #: the host doesn't hand a placeholder to the ENCODE catalog. Deliberately permissive: canopy is
@@ -50,9 +50,10 @@ TOOLS = [
         "name": "attach",
         "description": (
             "Attach a cohort's per-question layers into GROVE before querying them: rE2G "
-            "enhancer->gene links, PCAWG structural variants and/or TCGA HiChIP contacts. "
-            "Returns what is now attached and the COHORTS / SV_COHORTS / HICHIP_COHORTS your "
-            "code must filter on. Call it once per cohort set; the grove keeps what it holds."
+            "enhancer->gene links, PCAWG structural variants, TCGA HiChIP contacts, PCAWG "
+            "gene expression and/or PCAWG copy number. Returns what is now attached and the "
+            "COHORTS / SV_COHORTS / HICHIP_COHORTS / EXPRESSION_COHORTS / CN_COHORTS your code "
+            "must filter on. Call it once per cohort set; the grove keeps what it holds."
         ),
         "input_schema": {
             "type": "object",

@@ -339,3 +339,75 @@ def test_hichip_worked_example_merges_by_partner_window_and_counts_tumours(tmp_p
         (128_100_000, "loop:MYC~intergenic", 1, False)]
     assert rows[0]["samples"] == ["S1", "S2"] and rows[0]["ccre_classes"] == ["dELS"] and rows[0]["n_ccre"] == 1
     assert all(r["type"] == "contact" and r["end"] == r["start"] + 9_999 and r["chrom"] == "chr8" for r in rows)
+
+
+def test_expression_worked_example_splits_carriers_from_the_rest_by_sample_id(tmp_path):
+    """The prompt's expression worked example, run as shipped: SVs and expression attached by
+    the preamble for one cohort code, carriers are the SV edges' sample ids, their expression is
+    a dict lookup on the gene's expression node, two rows come out with medians and sizes."""
+    import json
+    import re
+    from pathlib import Path
+
+    from genogrove_canopy.layers import expression, sv
+
+    md = (Path(expression.__file__).parents[1] / "prompts" / "system.md").read_text()
+    m = re.search(r'### Gene expression \(PCAWG RNA-seq\).*?attach\(layers=\["sv", "expression"\], cohort="liver"\)`, then `run`:\n\n```python\n(.*?)```', md, re.S)
+    assert m, "expression worked example not found in system.md"
+
+    g = pg.Grove(order=100)
+    g.insert("chr5", pg.GenomicCoordinate("-", 1_253_147, 1_295_068), {"type": "gene", "id": "ENSG00000164362.21", "name": "TERT"})
+    gg = tmp_path / "tert.gg"
+    g.serialize(str(gg))
+    svs = tmp_path / "LIRI-JP.sv.tsv"
+    svs.write_text("\t".join(sv._FIELDS + ("sample", "cohort")) + "\n"
+                   "chr5\t1260000\t1260001\tchr5\t9000000\t9000001\tSV1\t5\t+\t-\tDEL\tm\tA1\tLIRI-JP\n"
+                   "chr5\t1270000\t1270001\tchr7\t9000000\t9000001\tSV2\t5\t+\t+\tTRA\tm\tA3\tLIRI-JP\n")
+    expr = tmp_path / "LIRI-JP.tsv"
+    expr.write_text("gene\tchrom\ttss\tA1\tA2\tA3\tA4\n"
+                    "ENSG00000164362\tchr5\t1295069\t6.0\t-9.9\t5.0\t-8.0\n")
+    code = "import json\n" + preamble.build(str(gg), None, {"LIRI-JP": str(svs)}, None, {"LIRI-JP": str(expr)}) + m.group(1)
+    result = sandbox.run(code, data_paths=[str(tmp_path)], extra_syspath=[_pygenogrove_site_dir()])
+
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert lines[0] == "TERT expression in LIRI-JP (2 rearranged tumours, 2 groups):"
+    rows = {r["group"]: r for r in map(json.loads, lines[1:])}
+    assert (rows["carriers"]["n"], rows["carriers"]["median"]) == (2, 6.0)
+    assert (rows["non-carriers"]["n"], rows["non-carriers"]["median"]) == (2, -8.0)
+    assert rows["carriers"]["unit"] == "log2(fpkm-uq+0.001)" and rows["carriers"]["type"] == "expression"
+
+
+def test_cn_worked_example_reports_every_segment_under_the_gene_per_tumour(tmp_path):
+    """The prompt's copy-number worked example, run as shipped: segments attached by the
+    preamble, one row per segment under MYC per tumour, a breakpoint inside the gene giving two
+    rows for that tumour, sorted by copy number."""
+    import json
+    import re
+    from pathlib import Path
+
+    from genogrove_canopy.layers import cn
+
+    md = (Path(cn.__file__).parents[1] / "prompts" / "system.md").read_text()
+    m = re.search(r'### Copy number \(PCAWG consensus\).*?attach\(layers=\["cn"\], cohort="breast"\)`, then `run`:\n\n```python\n(.*?)```', md, re.S)
+    assert m, "copy-number worked example not found in system.md"
+
+    g = pg.Grove(order=100)
+    g.insert("chr8", pg.GenomicCoordinate("+", 127_735_433, 127_742_951), {"type": "gene", "id": "ENSG00000136997.20", "name": "MYC"})
+    gg = tmp_path / "myc.gg"
+    g.serialize(str(gg))
+    table = tmp_path / "BRCA-US.tsv"
+    table.write_text("\t".join(cn._FIELDS) + "\n"
+                     "chr8\t127000000\t128000000\t6\t5\t1\t3\tS1\tBRCA-US\n"
+                     "chr8\t127000000\t127740000\t2\t1\t1\t2\tS2\tBRCA-US\n"
+                     "chr8\t127740000\t128000000\t3\t3\t0\t2\tS2\tBRCA-US\n"
+                     "chr8\t100\t200\t1\t\t\t\tS3\tBRCA-US\n")
+    code = "import json\n" + preamble.build(str(gg), None, None, None, None, {"BRCA-US": str(table)}) + m.group(1)
+    result = sandbox.run(code, data_paths=[str(tmp_path)], extra_syspath=[_pygenogrove_site_dir()])
+
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert lines[0] == "MYC copy number in BRCA-US (2 tumours, 1 segments at >= 4 copies):"
+    rows = [json.loads(ln) for ln in lines[1:]]
+    assert [(r["sample"], r["total_cn"], r["start"]) for r in rows] == [("S1", 6, 127_000_000), ("S2", 3, 127_740_000), ("S2", 2, 127_000_000)]
+    assert rows[0]["end"] == 127_999_999 and rows[0]["minor_cn"] == 1 and rows[0]["type"] == "cn_segment"
