@@ -50,12 +50,12 @@ def cohort_file(code: str) -> Path:
     """One TCGA project's loops as a plain TSV the sandbox can read, extracted once from the
     pinned derived tarball (``tcga.hichip.loops``: one ``<project>.tsv`` per project, built by
     ``tools/build_hichip_cohorts.py``). The sandbox is granted only the roots the host names,
-    so the host extracts into ``<cache>/hichip_cohorts/<code>.tsv``. Disposable cache."""
+    so the host extracts into ``<cache>/hichip_cohorts/<pin>/<code>.tsv``. Disposable cache."""
     import os
     import shutil
     import tarfile
 
-    dest = (HICHIP_DIR / f"{code}.tsv").resolve()  # resolved: see cli._grove_context
+    dest = (resources.pinned_dir(HICHIP_DIR, "tcga.hichip.loops") / f"{code}.tsv").resolve()  # resolved: see cli._grove_context
     if dest.exists():
         return dest
     if code not in {r["project_code"] for r in resources.hichip_cohorts()}:

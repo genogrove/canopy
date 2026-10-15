@@ -81,13 +81,13 @@ def cohort_file(code: str) -> Path:
 
     The pinned tarballs hold one gzipped BEDPE per sample; the sandbox has no ``gzip`` and is
     granted only the roots the host names, so the host extracts the cohort's samples (from the
-    packaged catalog's aliquot list) into ``<cache>/sv_cohorts/<code>.tsv``: the 12 BEDPE
+    packaged catalog's aliquot list) into ``<cache>/sv_cohorts/<pins>/<code>.tsv``: the 12 BEDPE
     columns plus ``sample`` (aliquot id) and ``cohort`` (project code). Disposable cache.
     """
     import os
     import tarfile
 
-    dest = (SV_DIR / f"{code}.tsv").resolve()  # resolved: see cli._grove_context
+    dest = (resources.pinned_dir(SV_DIR, "pcawg.sv.icgc", "pcawg.sv.tcga") / f"{code}.tsv").resolve()  # resolved: see cli._grove_context
     if dest.exists():
         return dest
     row = next((r for r in resources.pcawg_cohorts() if r["project_code"] == code), None)
