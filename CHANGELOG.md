@@ -23,7 +23,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   layer's chain file, both ends independently (827,894 segments kept, 131,301 dropped, mostly
   ends in assembly gaps, counted per cohort) — and the derived tarballs are re-hosted and
   pinned by commit + sha256 as `pcawg.expression` and `pcawg.cn`. The prompt gains "Gene
-  expression" and "Copy number" sections whose worked examples run in the sandbox in CI.
+  expression" and "Copy number" sections whose worked examples run in the sandbox in CI
+  ([#43](https://github.com/genogrove/canopy/pull/43)).
 - **canopy is an agent loop, not one-shot codegen**: `llm.answer` gives the model three
   tools — `attach(layers, cohort)` for a pinned cohort's layers, `build(code)` for its own
   data, `run(code)` for a read-only query — feeds every result back, and stops when the model
