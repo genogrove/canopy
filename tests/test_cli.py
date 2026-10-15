@@ -26,9 +26,11 @@ def test_declared_cohorts_split_on_semicolon(monkeypatch):
 
     seen = []
     monkeypatch.setattr(cli, "_resolve_cohorts", lambda specs: seen.append(specs) or {s: [] for s in specs})
-    args = type("A", (), {"cohort": None})()
-    cohorts, note = cli._resolve_query_cohorts(args, "K562; HepG2 ;", ["enhancers"])
+    cohorts, note = cli._resolve_query_cohorts([], "K562; HepG2 ;", ["enhancers"])
     assert seen == [["K562", "HepG2"]] and note is None and list(cohorts) == ["K562", "HepG2"]
+    # the user's override wins over the model's term
+    cli._resolve_query_cohorts(["LNCaP"], "K562", ["enhancers"])
+    assert seen[-1] == ["LNCaP"]
 
 
 def test_resolve_cohorts_gives_both_layers_keys():
@@ -50,14 +52,13 @@ def test_resolve_cohorts_gives_both_layers_keys():
         cli._resolve_cohorts(["nonsense-tissue"])
 
 
-def test_answer_wires_the_declared_layers_for_the_resolved_cohort(monkeypatch, tmp_path):
-    """LAYERS decides what the host prepares: an SV question for a PCAWG cohort extracts that
-    cohort's table, and the script handed to the sandbox attaches it and names it in SV_COHORTS;
-    no enhancer index is touched."""
-    from genogrove_canopy import cli, llm
+def test_session_attach_wires_the_layer_for_the_resolved_cohort(monkeypatch, tmp_path):
+    """`attach` decides what the host prepares: an SV attach for a PCAWG cohort extracts that
+    cohort's table, and the next `run`'s script attaches it and names it in SV_COHORTS; no
+    enhancer index is touched. Before any attach, `run` uses the base preamble."""
+    from genogrove_canopy import cli, preamble
     from genogrove_canopy.layers import enhancers, sv
 
-    monkeypatch.setattr(llm, "generate_query", lambda q, sp, model=None: ("BRCA-US", ["sv"], "print(1)\n"))
     table = tmp_path / "BRCA-US.tsv"
     table.write_text("\t".join(sv._FIELDS + ("sample", "cohort")) + "\n")
     monkeypatch.setattr(sv, "cohort_file", lambda code: table)
@@ -67,18 +68,91 @@ def test_answer_wires_the_declared_layers_for_the_resolved_cohort(monkeypatch, t
     class _R:
         truncated = False
         returncode, timed_out, stdout, stderr = 0, False, "ok: 1", ""
-    args = type("A", (), {"model": "m", "show_code": False, "cohort": None, "format": "tsv"})()
-    from genogrove_canopy import preamble
     base = preamble.build("/x.gg")                    # the real base, as _grove_context hands it over
-    _out, err, *_ = cli._answer("SVs near MYC in BRCA-US?", system_prompt="", base=base, gg="/x.gg",
-                               args=args, execute=lambda s: scripts.append(s) or _R())
-    assert err == "" and len(scripts) == 1
-    script = scripts[0]
+    session = cli.Session(gg="/x.gg", base=base, execute=lambda s: scripts.append(s) or _R(), say=lambda m: None)
+    assert session.run("print(0)\n") == "ok: 1" and "globals().pop('_CANOPY_STATE', None)" in scripts[0]
+    note = session.attach(["sv"], "BRCA-US")
+    assert 'SV_COHORTS = ["BRCA-US"]' in note and "SVs attached from BRCA-US" in note
+    assert session.run("print(1)\n") == "ok: 1" and session.stdout == "ok: 1" and session.code == "print(1)\n"
+    script = scripts[1]
     assert "def attach_tracked(" in script and f'["BRCA-US", "{table}"]' in script
     assert 'SV_COHORTS = ["BRCA-US"]' in script and "COHORTS = []" in script
     # exactly one preamble: the base one evicts the worker memo, so it must not precede the
     # cohort one (that concatenation is what silently disabled the warm grove)
     assert script.count("GROVE = ") == 1 and "globals().pop('_CANOPY_STATE', None)" not in script
+    assert session.attach([], "") .startswith("error:")
+
+
+def test_session_build_makes_every_later_run_warm(monkeypatch):
+    """`build` runs with the mutable grove; after it, a plain `run` must not fall back to the
+    lazy base preamble (which would not see the inserted records) — it takes the memo path with
+    the read-only view. A failed build still flips the switch: partial inserts are in the memo."""
+    from genogrove_canopy import cli
+
+    scripts = []
+
+    class _R:
+        truncated = False
+        returncode, timed_out, stderr = 0, False, ""
+
+        def __init__(self, out):
+            self.stdout = out
+    outs = iter(["built: 3", "rows", ""])
+    session = cli.Session(gg="/x.gg", base="BASE\n", execute=lambda s: scripts.append(s) or _R(next(outs)), say=lambda m: None)
+    assert session.build("GROVE.insert(...)\n") == "built: 3"
+    assert "GROVE = _grove\n" in scripts[0] and "_readonly(_grove)" not in scripts[0]
+    assert session.run("q()\n") == "rows" and session.built
+    assert "GROVE = _readonly(_grove)" in scripts[1] and "BASE" not in scripts[1] and "GroveView.open" not in scripts[1]
+    assert session.build("x\n").startswith("(built") and "own data built" in session.notes[0]
+
+
+def test_own_data_files_are_named_for_build_and_granted(monkeypatch, tmp_path):
+    """`--data FILE` reaches the model as a path to `open()` in `build`, and the sandbox roots.
+    Without any, the block says so; a non-file is refused before anything runs."""
+    from genogrove_canopy import cli, resources
+
+    block = cli.resources_block("GROVE", "d", "- l", ["/tmp/mine.bed"])
+    assert "`/tmp/mine.bed`" in block and "`build`" in block
+    assert "No own files" in cli.resources_block("GROVE", "d", "- l")
+    gg = tmp_path / "g.gg"
+    gg.touch()
+    mine = tmp_path / "mine.bed"
+    mine.write_text("chr1\t1\t2\n")
+    monkeypatch.setattr(resources, "ensure_all_grove", lambda name: gg)
+    block, _pre, paths = cli._grove_context([str(mine)])
+    assert str(mine.resolve()) in block and paths[-1] == str(mine.resolve())
+    with pytest.raises(SystemExit, match="not a file"):
+        cli._grove_context([str(tmp_path)])
+
+
+def test_answer_renders_the_models_reply_over_the_last_rows(monkeypatch, tmp_path):
+    """The CLI output is the model's prose, then the rows of its last successful run in the
+    chosen format; an abstain (empty reply at the turn cap) is an error naming the cap; the
+    trace file holds every call."""
+    import json
+    from genogrove_canopy import cli, llm
+
+    class _R:
+        truncated = False
+        returncode, timed_out, stderr = 0, False, ""
+
+        def __init__(self, out):
+            self.stdout = out
+    outs = iter(['{"chrom": "chr8", "start": 1, "end": 2, "name": "MYC"}\n', "ignored"])
+
+    def fake_answer(question, system_prompt, session, **kw):
+        session.run("a()\n")
+        return "MYC it is.", [{"tool": "run", "input": {"code": "a()\n"}, "output": "x"}]
+    monkeypatch.setattr(llm, "answer", fake_answer)
+    args = type("A", (), {"model": "m", "show_code": False, "cohort": None, "format": "tsv",
+                          "trace": str(tmp_path / "t.json")})()
+    out, err, trace, _ = cli._answer("q", system_prompt="", base="", gg="/x.gg", args=args,
+                                     execute=lambda s: _R(next(outs)))
+    assert err == "" and out.startswith("MYC it is.\n\n") and "chr8\t1\t2" in out
+    assert json.loads((tmp_path / "t.json").read_text())["trace"] == trace
+    monkeypatch.setattr(llm, "answer", lambda *a, **kw: ("", [{"tool": "run"}] * 2))
+    out, err, *_ = cli._answer("q", system_prompt="", base="", gg="/x.gg", args=args, execute=None)
+    assert out == "" and "2 tool calls" in err and str(llm.MAX_TURNS) in err
 
 
 def test_sv_question_without_a_cohort_gets_no_default(monkeypatch):
@@ -86,10 +160,9 @@ def test_sv_question_without_a_cohort_gets_no_default(monkeypatch):
     tumour cohort, so resolution returns nothing and says why."""
     from genogrove_canopy import cli
 
-    args = type("A", (), {"cohort": None})()
-    cohorts, note = cli._resolve_query_cohorts(args, "", ["sv"])
+    cohorts, note = cli._resolve_query_cohorts([], "", ["sv"])
     assert cohorts == {} and "name a tissue or pass --cohort" in note
-    cohorts, note = cli._resolve_query_cohorts(args, "", ["enhancers", "sv"])
+    cohorts, note = cli._resolve_query_cohorts([], "", ["enhancers", "sv"])
     assert cohorts and note == "default"                      # an enhancer question still defaults
 
 

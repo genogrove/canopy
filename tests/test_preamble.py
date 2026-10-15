@@ -16,6 +16,19 @@ def test_preamble_no_cohorts_opens_lazily():
     compile(pre, "<preamble>", "exec")
 
 
+def test_preamble_build_turn_hands_out_the_mutable_grove_and_warm_runs_keep_it():
+    """`build` binds GROVE to the memoised grove itself (no read-only view) with no cohorts
+    needed; a `warm` run afterwards takes the memo path with the view, so it sees what the
+    build inserted — the lazy `GroveView.open` would not."""
+    mut = preamble.build("/tmp/x.gg", mutable=True)
+    assert "GROVE = _grove\n" in mut and "_readonly(_grove)" not in mut and "_CANOPY_STATE" in mut
+    warm = preamble.build("/tmp/x.gg", warm=True)
+    assert "GROVE = _readonly(_grove)" in warm and "GroveView.open" not in warm
+    for pre in (mut, warm):
+        assert "COHORTS = []" in pre
+        compile(pre, "<preamble>", "exec")
+
+
 def test_preamble_with_cohorts_attaches_each_onto_one_grove():
     pre = preamble.build(
         "/tmp/x.gg", {"EFO:0005726": "/tmp/a.tsv", "EFO:0009318": "/tmp/b.tsv"})

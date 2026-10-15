@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Command-line entry point for canopy.
 
-A thin wrapper: parse the question, then orchestrate the three stages — generate
-Python (:mod:`genogrove_canopy.llm`), execute it under restrictions (:mod:`genogrove_canopy.sandbox`), and
-print the result. The host resolves each dataset to a serialized ``.gg`` and
-injects its path as a variable; the generated code only deserializes and queries.
+A thin wrapper: parse the question, hand the agent loop (:mod:`genogrove_canopy.llm`) a
+:class:`Session` — the host side of its two tools, which attach layers into the grove and run
+programs under restrictions (:mod:`genogrove_canopy.sandbox`) — and print the answer. The host
+resolves each dataset to a serialized ``.gg`` and binds it as ``GROVE``; the generated code
+only queries.
 """
 
 from __future__ import annotations
@@ -64,7 +65,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--show-code",
         action="store_true",
-        help="Print the generated Python before running it.",
+        help="Print each program the agent runs, and what came back, as it goes (stderr).",
+    )
+    parser.add_argument(
+        "--trace",
+        metavar="FILE",
+        help="Write the full trace — every tool call, its input and output — as JSON to FILE.",
     )
     parser.add_argument(
         "--init",
@@ -86,6 +92,15 @@ def build_parser() -> argparse.ArgumentParser:
              "e.g. 'LNCaP' or 'EFO:0005726'; repeatable for several). Enables enhancer "
              "queries. Omit and enhancers still load for an enhancer question, defaulting to "
              f"the flagship cohort. See --list-cohorts.",
+    )
+    parser.add_argument(
+        "--data",
+        action="append",
+        metavar="FILE",
+        default=[],
+        help="Your own interval file (BED, TSV, …; repeatable). The agent may read it and put "
+             "its records into the grove with `build`, then query them like any layer. Only "
+             "these files are readable beyond the pinned datasets.",
     )
     parser.add_argument(
         "--list-cohorts",
@@ -116,13 +131,13 @@ def _bridge() -> list[dict]:
 
 
 def _resolve_cohorts(specs):
-    """Map cohort specs (``--cohort`` values or the model's ``COHORT:`` terms) to per-layer keys:
+    """Map cohort specs (``--cohort`` values or the model's ``attach`` cohort terms) to per-layer keys:
     ``{label: {"re2g": [ontology ids], "pcawg": [project codes], "hichip": [TCGA projects]}}``.
 
     Each spec resolves, in order, as: a layer key as written (an rE2G ontology id, a PCAWG
     project code, a TCGA project); an exact rE2G biosample name (a bridge row for the same word
     adds its PCAWG codes and TCGA projects); a bridge term or alias (``data/cohorts.tsv`` — one
-    tissue word gives every layer's keys, which is what lets one ``COHORT:`` line drive
+    tissue word gives every layer's keys, which is what lets one cohort term drive
     enhancers, SVs *and* contacts); or a case-insensitive substring of an rE2G biosample name
     (most-replicated match wins). Raises ``SystemExit`` with a pointer to ``--list-cohorts`` on
     no match.
@@ -164,7 +179,7 @@ def _resolve_cohorts(specs):
 
 
 def _list_cohorts() -> None:
-    """Print what ``--cohort`` / ``COHORT:`` can name: the tissue terms that drive both layers,
+    """Print what ``--cohort`` / ``attach`` can name: the tissue terms that drive both layers,
     then each layer's own keys (rE2G biosamples most-replicated first, PCAWG project codes)."""
     print("# tissue terms (data/cohorts.tsv) — one word resolves every layer")
     print(f"{'term':14}  {'rE2G':14}  {'PCAWG':32}  {'HiChIP':20}  aliases")
@@ -185,14 +200,15 @@ def _list_cohorts() -> None:
         print(f"{r['project_code']:10}  {r['n_samples']:>7}  {r['n_loops']:>8}")
 
 
-def _grove_context():
-    """Resolve the shipped grove to ``(resources_block, code_preamble, data_paths)``.
+def _grove_context(own=()):
+    """Resolve the shipped grove to ``(resources_block, code_preamble, data_paths)``. ``own`` are
+    the user's ``--data`` files: granted to the sandbox and named in the block for ``build``.
 
     The grove is the GENCODE backbone with the **Tier-1 static layers already in it** — currently
     the ENCODE cCRE registry, built into the pinned artifact rather than baked on first run (see
     ``resources.ensure_all_grove``). The preamble binds ``GROVE`` to an open ``GroveView`` of it,
     so one `intersect` returns genes *and* cCREs. The enhancer layer is **not** in the artifact
-    (it is cohort-specific): when the model declares ``COHORT``/``LAYERS``, ``_answer`` runs
+    (it is cohort-specific): once the model calls ``attach``, ``Session`` runs
     ``preamble.build(gg, cohort_links, sv_files)`` **instead of** this base preamble — the two
     are exclusive, never concatenated: the base one evicts ``_CANOPY_STATE`` from the query's
     namespace, the cohort one memoises the attached grove in it. Both bind ``GROVE``, so
@@ -208,17 +224,21 @@ def _grove_context():
     enhancers.LINKS_DIR.mkdir(parents=True, exist_ok=True)
     sv.SV_DIR.mkdir(parents=True, exist_ok=True)
     hichip.HICHIP_DIR.mkdir(parents=True, exist_ok=True)
+    own = [str(Path(p).resolve()) for p in own]
+    for p in own:
+        if not Path(p).is_file():
+            raise SystemExit(f"canopy: --data {p}: not a file")
     block = resources_block(
         "GROVE", resources.RESOURCES[_BASE].description,
-        layers.catalogue_block(["ccre", "enhancers", "sv", "hichip"]),
+        layers.catalogue_block(["ccre", "enhancers", "sv", "hichip"]), own,
     )
     # The sandbox reads only these roots. `LINKS_DIR` is where `enhancers.preamble`'s
     # `attach_links` opens a cohort's links table, so it must be granted alongside the grove.
     return block, preamble.build(gg), [gg, str(enhancers.LINKS_DIR.resolve()), str(sv.SV_DIR.resolve()),
-                                       str(hichip.HICHIP_DIR.resolve())]
+                                       str(hichip.HICHIP_DIR.resolve()), *own]
 
 
-def resources_block(var: str, description: str, layers_block: str) -> str:
+def resources_block(var: str, description: str, layers_block: str, own=()) -> str:
     """Render the "Available resources" text the model reads, for grove handle ``var``.
 
     Pure so it can be tested without a grove: ``_grove_context`` resolves the ~109 MB artifact,
@@ -228,10 +248,10 @@ def resources_block(var: str, description: str, layers_block: str) -> str:
     """
     return (
         f"- `{var}`: an **open** grove handle ({description}) — gene/transcript/exon structure "
-        f"**plus the ENCODE cCRE nodes**, and, when you declare `COHORT`/`LAYERS` (see "
+        f"**plus the ENCODE cCRE nodes**, and, when you call `attach` (see "
         f"\"Per-question layers\"), that cohort's rE2G enhancer nodes/edges, PCAWG "
         f"breakpoint edges and/or TCGA HiChIP contact windows and edges, attached by the host "
-        f"before your code runs. Query `{var}` directly. "
+        f"before your next `run`. Query `{var}` directly. "
         f"**Never open a path yourself** — a handle you "
         f"open lacks the attached layer. A **located** query (a variant at chr7:55191822) reads "
         f"just that locus; a **genome-wide / gene-name** query works from the same handle. "
@@ -239,11 +259,14 @@ def resources_block(var: str, description: str, layers_block: str) -> str:
         f"  Layers in the grove — nodes come back from `intersect` alongside genes, filter on "
         f"`source`/`type`:\n"
         f"  {layers_block.replace(chr(10), chr(10) + '  ')}\n"
-        f"- `COHORT:` terms that resolve both layers (data/cohorts.tsv): "
+        f"- `attach` cohort terms that resolve every layer (data/cohorts.tsv): "
         f"{', '.join(r['term'] for r in _bridge())}. A plain tissue word means the tissue "
         f"biosample for enhancers; the disease word ('liver cancer', 'HCC') means the cancer cell "
         f"line. An ENCODE biosample name/id, a PCAWG project code or a TCGA project (TCGA-BRCA) "
         f"resolves one layer directly.\n"
+        + ("".join(f"- Your own file, readable with `open()`, to put into `{var}` with `build` (see "
+                   f"\"Own data\"): `{p}`\n" for p in own) if own else
+           "- No own files were given (`--data FILE` adds one), so `build` has nothing to read.\n")
     )
 
 
@@ -395,14 +418,15 @@ def _pygenogrove_site_dir() -> str:
     return str(f.parent.parent if f.name == "__init__.py" else f.parent)
 
 
-def _resolve_query_cohorts(args, cohort_hint, layers):
-    """Grounded cohort resolution for a query that declared ``layers``, precedence-ordered:
-    ``--cohort`` override → the model's declared ``COHORT`` (resolved against the catalogs; no
-    match → none, so a wrong tissue is never silently substituted) → the default cohort, but
-    **only for an enhancer question**: SVs are per tumour cohort and there is no honest default.
-    Returns ``(cohorts, note)`` — the ``_resolve_cohorts`` map and a stderr line or ``None``."""
-    if args.cohort:
-        return _resolve_cohorts(args.cohort), None
+def _resolve_query_cohorts(override, cohort_hint, layers):
+    """Grounded cohort resolution for an ``attach`` of ``layers``, precedence-ordered: the
+    user's ``override`` specs (``--cohort`` / the picker) → the model's ``cohort`` (resolved
+    against the catalogs; no match → none, so a wrong tissue is never silently substituted) →
+    the default cohort, but **only for an enhancer question**: SVs are per tumour cohort and
+    there is no honest default. Returns ``(cohorts, note)`` — the ``_resolve_cohorts`` map and
+    a note or ``None``."""
+    if override:
+        return _resolve_cohorts(override), None
     if cohort_hint:  # one or more, `;`-separated — a comparison question names several
         try:
             return _resolve_cohorts([c for c in map(str.strip, cohort_hint.split(";")) if c]), None
@@ -473,55 +497,118 @@ def _hichip_codes(cohorts) -> list:
 
 
 
-def _answer(question, *, system_prompt, base, gg, args, execute):
-    """Translate one question to code, run it via ``execute(script)``, and render.
+class Session:
+    """The host side of the agent's two tools, for one question over one grove.
 
-    ``execute`` is a ``script -> SandboxResult`` callable (``sandbox.run`` for one-shot,
-    ``Worker.submit`` for interactive). Returns ``(rendered_stdout, error_msg, gen_s, enh_s,
-    exec_s)`` — exactly one of stdout/error is non-empty. Three times, not two: the rE2G
-    attach sits between code-gen and execution, and leaving it out made the reported total
-    wrong by however long it took.
+    ``attach(layers, cohort)`` grounds the cohort(s) (``override`` wins, then the model's term,
+    then the enhancer default), materialises the layers' data and rebuilds the preamble so the
+    next ``run`` sees them; ``run(code)`` executes one program through ``execute(script)`` (a
+    ``Worker.submit``) and returns its stdout, or the error, as the text the model reads. Both
+    return text, never raise: the model is the one that can fix a bad call.
 
-    Per-question layers are resolved **per question**: the model declares ``COHORT``/``LAYERS``,
-    the host grounds the cohort(s) (``--cohort`` overrides, repeatable), and each cohort's links
-    are attached onto the mutable grove in the sandbox — reused warm across turns via
-    ``_CANOPY_STATE`` — rather than fetched per target and injected as a list.
+    Attached layers accumulate across calls within the question, so ``COHORTS`` names every
+    cohort the model asked for. Across questions the sandbox's warm grove keeps what was
+    attached (``_CANOPY_STATE``), so attaching again is a memo hit.
     """
-    log.say(f"Generating a pygenogrove query ({args.model})")
-    t0 = time.perf_counter()
-    cohort_hint, layers, code = llm.generate_query(question, system_prompt, model=args.model)
-    gen_s = time.perf_counter() - t0
-    log.took("Query generated", gen_s)
-    if args.show_code:
-        print("# --- generated code ---", file=sys.stderr)
-        print(code, file=sys.stderr)
-    enh_pre, enh_s = "", 0.0
-    if layers:  # a per-question layer was declared — resolve the cohort(s), prepare its data
-        cohorts, note = _resolve_query_cohorts(args, cohort_hint, layers)
+
+    def __init__(self, *, gg, base, execute, override=(), say=log.say, warm=False):
+        self.gg, self.base, self.execute, self.override, self.say = gg, base, execute, list(override), say
+        self.cohort_links, self.sv_files, self.hichip_files = {}, {}, {}
+        self.notes = []         # what was attached / what was missing, for the UI
+        self.stdout = ""        # the last successful run's output — the rows under the answer
+        self.code = ""          # the last program run
+        # Every run uses the warm (memoised) grove, not the lazy view: after a `build` in this
+        # question, or from the start when own files are given — a build in an earlier question
+        # of the session may have put them in, and the lazy view would not see that.
+        self.built = warm
+
+    def attach(self, layers, cohort=""):
+        if not layers:
+            return "error: name at least one layer (enhancers, sv, hichip)"
+        cohorts, note = _resolve_query_cohorts(self.override, cohort, layers)
         if note and note != "default":
-            log.say(note)
-        t_enh = time.perf_counter()
-        cohort_links, sv_files, hichip_files = prepare_layers(cohorts, layers, log.say)
-        enh_s = time.perf_counter() - t_enh
-        if cohort_links or sv_files or hichip_files:
-            enh_pre = preamble.build(gg, cohort_links, sv_files, hichip_files)
-            src = " (default — name a tissue or pass --cohort)" if note == "default" else ""
-            what = " + ".join(w for w, d in (("rE2G", cohort_links), ("SV", sv_files),
-                                             ("HiChIP", hichip_files)) if d)
-            log.took(f"{what}: attached {'; '.join(cohorts)}{src}", enh_s)
-    # JSONL is the output contract, so guarantee `json` is importable even if the
-    # generated code forgets the import (it's already in the allowlist).
-    log.say("Running the query over the grove")
-    t1 = time.perf_counter()
-    result = execute("import json\n" + (enh_pre or base) + code)
-    exec_s = time.perf_counter() - t1
-    error = sandbox.result_error(result)
-    if error:
-        return "", error, gen_s, enh_s, exec_s
-    rendered = _render(result.stdout, args.format)
-    if not rendered.strip():
-        return "", "(the generated code produced no output)", gen_s, enh_s, exec_s
-    return rendered, "", gen_s, enh_s, exec_s
+            self.say(note)
+            self.notes.append(note)
+        said = []
+        links, svs, loops = prepare_layers(cohorts, layers, lambda m: (self.say(m), said.append(m)))
+        self.notes += [m for m in said if m.startswith("no ")]
+        self.cohort_links.update(links)
+        self.sv_files.update(svs)
+        self.hichip_files.update(loops)
+        attached = []
+        if links or svs or loops:
+            what = " + ".join(w for w, d in (("enhancers", links), ("SVs", svs), ("contacts", loops)) if d)
+            attached.append(f"{what} attached from {'; '.join(cohorts)}"
+                            + (" (default — the question named no tissue)" if note == "default" else ""))
+            self.notes.append(attached[-1])
+        return "\n".join(attached + [m for m in said if m.startswith("no ")] + [
+            f"COHORTS = {json.dumps(sorted(self.cohort_links))}",
+            f"SV_COHORTS = {json.dumps(sorted(self.sv_files))}",
+            f"HICHIP_COHORTS = {json.dumps(sorted(self.hichip_files))}",
+        ])
+
+    def _preamble(self, mutable=False) -> str:
+        if self.cohort_links or self.sv_files or self.hichip_files or self.built or mutable:
+            return preamble.build(self.gg, self.cohort_links, self.sv_files, self.hichip_files,
+                                  mutable=mutable, warm=self.built)
+        return self.base
+
+    def _execute(self, code, mutable=False):
+        # JSONL is the output contract, so guarantee `json` is importable even if the
+        # generated code forgets the import (it's already in the allowlist).
+        result = self.execute("import json\n" + self._preamble(mutable) + code)
+        error = sandbox.result_error(result)
+        return ("error:\n" + error) if error else result.stdout
+
+    def build(self, code):
+        """The model's own data goes into the warm grove; from here on every run uses it."""
+        out = self._execute(code, mutable=True)
+        self.built = True   # even on failure: partial inserts are in the memo now
+        self.notes.append("own data built into the grove" if not out.startswith("error:") else "a build failed")
+        return out if out.strip() else "(built; the program printed nothing)"
+
+    def run(self, code):
+        self.code = code
+        out = self._execute(code)
+        if out.startswith("error:"):
+            return out
+        if not out.strip():
+            return "(the program produced no output)"
+        self.stdout = out
+        return out
+
+
+def _show_turn(entry) -> None:
+    """``--show-code``: each tool call and its result, as they happen."""
+    if entry["tool"] in ("run", "build"):
+        print(f"# --- {entry['tool']} ---", file=sys.stderr)
+        print(entry["input"].get("code", ""), file=sys.stderr)
+    else:
+        print(f"# --- attach {entry['input']} ---", file=sys.stderr)
+    print("# --- result ---", file=sys.stderr)
+    print(entry["output"], file=sys.stderr)
+
+
+def _answer(question, *, system_prompt, base, gg, args, execute):
+    """Answer one question: the agent loop over a :class:`Session`, then render.
+
+    ``execute`` is a ``script -> SandboxResult`` callable (a ``Worker.submit``). Returns
+    ``(text, error, trace, seconds)`` — ``text`` is the model's answer with the last run's rows
+    rendered in ``args.format`` beneath it; exactly one of text/error is non-empty.
+    """
+    session = Session(gg=gg, base=base, execute=execute, override=args.cohort or (),
+                      warm=bool(getattr(args, "data", ())))
+    log.say(f"Asking {args.model}")
+    t0 = time.perf_counter()
+    text, trace = llm.answer(question, system_prompt, session, model=args.model,
+                             on_turn=_show_turn if args.show_code else None)
+    took = time.perf_counter() - t0
+    if args.trace:
+        Path(args.trace).write_text(json.dumps({"question": question, "answer": text, "trace": trace}, indent=1))
+    if not text:
+        return "", f"no answer after {len(trace)} tool calls — the turn cap ({llm.MAX_TURNS}) was reached", trace, took
+    rows = _render(session.stdout, args.format) if session.stdout else ""
+    return text + "\n" + (f"\n{rows}" if rows.strip() else ""), "", trace, took
 
 
 def _interactive(args, *, system_prompt, preamble, data_paths, site_dir) -> int:
@@ -541,9 +628,9 @@ def _interactive(args, *, system_prompt, preamble, data_paths, site_dir) -> int:
             if question in ("exit", "quit"):
                 break
             try:
-                out, err, gen_s, enh_s, exec_s = _answer(question, system_prompt=system_prompt,
-                                                  base=preamble, gg=data_paths[0], args=args,
-                                                  execute=worker.submit)
+                out, err, trace, took = _answer(question, system_prompt=system_prompt,
+                                                base=preamble, gg=data_paths[0], args=args,
+                                                execute=worker.submit)
             except Exception as exc:  # e.g. an LLM error — keep the session alive
                 print(f"canopy: {exc}", file=sys.stderr)
                 continue
@@ -552,9 +639,7 @@ def _interactive(args, *, system_prompt, preamble, data_paths, site_dir) -> int:
             else:
                 sys.stdout.write(out)
                 sys.stdout.flush()
-            log.say(f"Answered in {gen_s + enh_s + exec_s:.2f}s — llm {gen_s:.2f}s"
-                    + (f" · rE2G {enh_s:.2f}s" if enh_s else "")
-                    + f" · grove {exec_s:.3f}s")
+            log.say(f"Answered in {took:.2f}s over {len(trace)} tool call(s)")
     finally:
         worker.close()
     return 0
@@ -590,10 +675,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        # The grove is cohort-independent (GENCODE + cCREs). Enhancers are resolved
-        # per question from the model's declared COHORT/LAYERS — see _answer.
+        # The grove is cohort-independent (GENCODE + cCREs). Layers are attached per
+        # question when the model calls `attach` — see Session.
         _prepare()
-        resources_block, preamble, data_paths = _grove_context()
+        resources_block, preamble, data_paths = _grove_context(args.data)
         site_dir = _pygenogrove_site_dir()
         system_prompt = llm.build_system_prompt(resources_block)
     except SystemExit:
@@ -606,12 +691,14 @@ def main(argv: list[str] | None = None) -> int:
         return _interactive(args, system_prompt=system_prompt, preamble=preamble,
                             data_paths=data_paths, site_dir=site_dir)
 
-    try:  # one-shot: a fresh sandbox per invocation
-        out, err, _gen_s, _enh_s, _exec_s = _answer(
-            args.question, system_prompt=system_prompt, base=preamble, gg=data_paths[0],
-            args=args,
-            execute=lambda s: sandbox.run(s, data_paths=data_paths, extra_syspath=[site_dir]),
-        )
+    # One-shot is still a warm worker: the agent may run several programs for one question,
+    # and the memoised grove makes every run after the first cheap.
+    try:
+        with sandbox.Worker(data_paths=data_paths, extra_syspath=[site_dir]) as worker:
+            out, err, _trace, _took = _answer(
+                args.question, system_prompt=system_prompt, base=preamble, gg=data_paths[0],
+                args=args, execute=worker.submit,
+            )
     except Exception as exc:
         print(f"canopy: {exc}", file=sys.stderr)
         return 1

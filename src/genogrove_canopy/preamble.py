@@ -31,17 +31,24 @@ from genogrove_canopy.layers import enhancers, hichip, sv
 
 def build(gg: str, cohort_links: dict[str, str] | None = None,
           sv_files: dict[str, str] | None = None,
-          hichip_files: dict[str, str] | None = None) -> str:
+          hichip_files: dict[str, str] | None = None, *,
+          mutable: bool = False, warm: bool = False) -> str:
     """The preamble for one question. ``cohort_links``: rE2G cohort id -> its links table
     (``enhancers.links_file``); ``sv_files``: PCAWG project code -> its cohort table
     (``sv.cohort_file``); ``hichip_files``: TCGA project -> its loop table
     (``hichip.cohort_file``). With none, ``GROVE`` is a lazy ``GroveView`` (~200 ms); with
-    any, a mutable ``Grove`` from the memo, with the missing cohorts attached in turn."""
+    any, a mutable ``Grove`` from the memo, with the missing cohorts attached in turn.
+
+    ``mutable`` is the agent's ``build`` tool: ``GROVE`` is the memoised ``Grove`` itself, so the
+    program can ``insert`` / ``add_edge`` its own data into it, and that data persists for the
+    session like an attached cohort. ``warm`` forces the memoised grove (read-only view) even
+    with no cohorts, so a ``run`` after a ``build`` sees what the build inserted — the lazy view
+    would not."""
     gg_lit = json.dumps(gg)
     cohorts = sorted(cohort_links or {})
     svs = sorted(sv_files or {})
     loops = sorted(hichip_files or {})
-    if not cohorts and not svs and not loops:  # the worker hands _CANOPY_STATE to every query: hide it here too
+    if not (cohorts or svs or loops or mutable or warm):  # the worker hands _CANOPY_STATE to every query: hide it here too
         return (f"import pygenogrove as pg\nGROVE = pg.GroveView.open({gg_lit})\n"
                 "COHORTS = []\nSV_COHORTS = []\nHICHIP_COHORTS = []\n"
                 "globals().pop('_CANOPY_STATE', None)\n")
@@ -92,6 +99,10 @@ def build(gg: str, cohort_links: dict[str, str] | None = None,
         # generated code a view that forwards only what a read-only `GroveView` has (plus the
         # count/lookup helpers), so a query cannot insert into it and quietly change the next
         # answer. Closures, not bound methods, so no `.__self__` leads back to the grove.
+        # A `build` turn is the one deliberate exception: the agent's own data goes in here.
+        # ponytail: a build program that fails halfway leaves its partial inserts in the memo
+        # (the attach loop above clears on failure; the program runs after it). The model sees
+        # the error and retries; add a snapshot/rollback if partial builds turn out to matter.
         "def _readonly(g):\n"
         "    _ok = {n for n in dir(pg.GroveView) if not n.startswith('_')} | {\n"
         "        'size', 'edge_count', 'vertex_count', 'external_vertex_count',\n"
@@ -105,7 +116,7 @@ def build(gg: str, cohort_links: dict[str, str] | None = None,
         "        def __len__(self):\n"
         "            return len(g)\n"
         "    return _View()\n"
-        "GROVE = _readonly(_grove)\n"
+        + ("GROVE = _grove\n" if mutable else "GROVE = _readonly(_grove)\n") +
         # Drop the host-only names from the namespace the generated code runs in, so a query
         # won't by accident evict or swap the grove the next query in a warm session is given.
         # (`sys.modules['__main__']` can still reach it — the sandbox's documented residual risk.)

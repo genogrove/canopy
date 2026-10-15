@@ -17,31 +17,30 @@ import pytest
 from genogrove_canopy import serve
 
 
-def test_serve_cohort_precedence():
+def test_cohort_precedence():
+    """Shared with the CLI: the picker/--cohort override → the model's term → the default
+    (enhancer questions only) → nothing, with a note, never a silent substitute."""
+    from genogrove_canopy.cli import _resolve_query_cohorts
     E = ["enhancers"]
-    # UI picker overrides the model's declaration
-    cohorts, note = serve._serve_cohorts("LNCaP", "K562", E)
+    cohorts, note = _resolve_query_cohorts(["LNCaP"], "K562", E)
+    assert cohorts and note is None and list(cohorts) == ["LNCaP clone FGC"]
+    cohorts, note = _resolve_query_cohorts([], "K562", E)
     assert cohorts and note is None
-    # else the model's declared cohort
-    cohorts, note = serve._serve_cohorts("", "K562", E)
-    assert cohorts and note is None
-    # neither -> the default cohort (flagged) — for an enhancer question only
-    cohorts, note = serve._serve_cohorts("", "", E)
+    cohorts, note = _resolve_query_cohorts([], "", E)
     assert cohorts and note == "default"
-    # an SV question with no cohort gets no default: SVs are per tumour cohort
-    cohorts, note = serve._serve_cohorts("", "", ["sv"])
+    cohorts, note = _resolve_query_cohorts([], "", ["sv"])
     assert cohorts == {} and "tumour cohort" in note
-    # a declared tissue with no catalog match -> none, with a note (never silently substituted)
-    cohorts, note = serve._serve_cohorts("", "NoSuchTissue12345", E)
+    cohorts, note = _resolve_query_cohorts([], "NoSuchTissue12345", E)
     assert cohorts == {} and note
 
 
 def _fake_pipeline(question, cohort, model, emit):
     emit("step", "Opening the grove")
     emit("tick", "fetched 2/2 replicate tracks")
-    emit("step", "Running the query over the grove")
-    return {"summary": [f"q: {question}"], "records": [{"chrom": "chr7", "start": 1, "end": 9}],
-            "code": "pass", "note": "note"}
+    emit("step", "Running a program over the grove")
+    return {"answer": "one row", "summary": [f"q: {question}"],
+            "records": [{"chrom": "chr7", "start": 1, "end": 9}],
+            "code": "pass", "trace": [{"tool": "run", "input": {"code": "pass"}, "output": "x"}], "note": "note"}
 
 
 @pytest.fixture
@@ -67,7 +66,7 @@ def test_ask_streams_steps_then_result(server):
     assert "step" in kinds and "tick" in kinds        # progress was narrated
     assert kinds[-1] == "done"                         # result comes last
     result = events[-1]["result"]
-    assert result["records"] and result["code"] == "pass"
+    assert result["records"] and result["code"] == "pass" and result["answer"] and result["trace"]
 
 
 def test_empty_question_rejected(server):
@@ -95,21 +94,27 @@ def test_malformed_request_gets_400(server, body, headers):
 def test_cohort_default_flag_is_not_display_text(monkeypatch):
     """A cohort that resolves but yields no enhancer links must not surface the internal
     "default" sentinel as the user-facing note (the CLI filters it; serve must too)."""
-    monkeypatch.setattr(serve, "_resolve_cohorts",
-                        lambda specs: {"LNCaP clone FGC": {"re2g": ["EFO:0005726"], "pcawg": []}})
+    from genogrove_canopy import cli
+    monkeypatch.setattr(cli, "_resolve_cohorts",
+                        lambda specs: {"LNCaP clone FGC": {"re2g": ["EFO:0005726"], "pcawg": [], "hichip": []}})
     monkeypatch.setattr(serve.resources, "_all_grove_gg",
                         lambda n: type("P", (), {"exists": lambda s: True})())
     monkeypatch.setattr(serve, "_grove", lambda m: type("G", (), {
         "system_prompt": "", "preamble": "", "gg": "", "model": m,
         "worker": type("W", (), {"submit": lambda s, c: type("R", (), {
             "returncode": 0, "timed_out": False, "truncated": False, "stdout": "ok: 1", "stderr": ""})()})()})())
-    monkeypatch.setattr(serve.llm, "generate_query",
-                        lambda q, sp, model=None: ("", ["enhancers"], "pass"))
+
+    def fake_answer(question, system_prompt, session, **kw):
+        session.attach(["enhancers"], "")
+        session.run("pass")
+        return "answer", []
+    monkeypatch.setattr(serve.llm, "answer", fake_answer)
     from genogrove_canopy.layers import enhancers
     monkeypatch.setattr(enhancers, "ensure_index", lambda cohort: False)
 
     result = serve._pipeline("enhancers of MYC", "", "m", lambda k, m: None)
     assert result["note"] != "default" and "no enhancers attached" in result["note"]   # the gap is said, never the sentinel
+    assert result["answer"] == "answer" and result["summary"] == ["ok: 1"]
 
 
 def test_page_served(server):

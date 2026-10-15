@@ -25,13 +25,19 @@ def test_layer_plain_layer_questions_reuse_one_attached_grove(tmp_path, monkeypa
     probe = ("gene = next(iter(GROVE.intersect(pg.GenomicCoordinate('*', 1500, 1500), 'chr1')))\n"
              "print(json.dumps({'samples': sorted(m['sample'] for m in GROVE.get_edges(gene) "
              "if m and m.get('rel') == 'breakpoint_edge')}))\n")
-    monkeypatch.setattr(cli.llm, "generate_query", lambda q, *a, **kw:
-                        (q, ["sv"], probe) if q else ("", [], "print('plain')\n"))
+    def fake_answer(question, system_prompt, session, **kw):
+        if question:
+            session.attach(["sv"], question)
+            session.run(probe)
+        else:
+            session.run("print('plain')\n")
+        return "answer", []
+    monkeypatch.setattr(cli.llm, "answer", fake_answer)
     base = preamble.build(str(gg))
     with sandbox.Worker(data_paths=[tmp_path], extra_syspath=[cli._pygenogrove_site_dir()]) as worker:
         monkeypatch.setattr(serve, "_grove", lambda _: SimpleNamespace(
             gg=str(gg), preamble=base, system_prompt="", model="test", worker=worker))
-        args = SimpleNamespace(model="test", show_code=False, cohort=None, format="json")
+        args = SimpleNamespace(model="test", show_code=False, cohort=None, format="json", trace=None)
         def ask(question):
             if adapter == "web":
                 result = serve._pipeline(question, "", "test", lambda *a: None)
@@ -45,3 +51,33 @@ def test_layer_plain_layer_questions_reuse_one_attached_grove(tmp_path, monkeypa
         assert ask("") == []                                  # a plain question in between must not evict the memo
         assert ask("BRCA-UK") == [{"samples": ["S1", "S2"]}]
         assert ask("BRCA-US") == [{"samples": ["S1", "S2"]}]
+
+
+def test_build_puts_own_data_into_the_warm_grove_for_later_runs(tmp_path):
+    """The agent's `build` reads a granted own file, inserts into the memoised grove, and a plain
+    `run` of the same session — and of the next question's session — sees the record through the
+    read-only view; a `run` cannot insert. Real worker, real bindings."""
+    gg = (tmp_path / "mini.gg").resolve()
+    g = pg.Grove()
+    g.insert("chr1", pg.GenomicCoordinate("+", 1000, 2000), {"type": "gene", "id": "A"})
+    g.serialize(str(gg))
+    mine = (tmp_path / "mine.bed").resolve()
+    mine.write_text("chr1\t1400\t1600\tpeak1\n")
+    build = (f"for ln in open({str(mine)!r}):\n"
+             "    c, s, e, n = ln.split()\n"
+             "    k = GROVE.insert(c, pg.GenomicCoordinate('*', int(s), int(e) - 1), {'type': 'peak', 'name': n, 'source': 'own'})\n"
+             "    for gk in GROVE.intersect(pg.GenomicCoordinate('*', int(s), int(e) - 1), c):\n"
+             "        if gk.data.get('type') == 'gene': GROVE.add_edge(k, gk, {'rel': 'overlaps', 'source': 'own'})\n"
+             "print('built: 1')\n")
+    probe = ("hits = [k.data for k in GROVE.intersect(pg.GenomicCoordinate('*', 1500, 1500), 'chr1')]\n"
+             "print(json.dumps(sorted(d.get('name') or d['id'] for d in hits)))\n")
+    base = preamble.build(str(gg))
+    with sandbox.Worker(data_paths=[gg, mine], extra_syspath=[cli._pygenogrove_site_dir()]) as worker:
+        s1 = cli.Session(gg=str(gg), base=base, execute=worker.submit, say=lambda m: None)
+        assert s1.run(probe) == '["A"]\n'                      # before the build: lazy view, gene only
+        assert s1.build(build) == "built: 1\n"
+        assert s1.run(probe) == '["A", "peak1"]\n'             # same session: warm view sees the peak
+        assert s1.run("GROVE.insert('chr1', pg.GenomicCoordinate('*', 1, 2), {})\n").startswith("error:")
+        # the next question's session: with own files given, it starts warm — the memo kept the peak
+        s2 = cli.Session(gg=str(gg), base=base, execute=worker.submit, say=lambda m: None, warm=True)
+        assert s2.run(probe) == '["A", "peak1"]\n'
