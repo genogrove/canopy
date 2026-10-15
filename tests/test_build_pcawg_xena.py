@@ -34,11 +34,24 @@ def test_resolve_specimens_prefers_the_specimens_own_sv_aliquot_then_the_donors_
         _row("D4", "SP4", "W4"),                            # donor with no SV aliquot at all
         _row("D4", "SP4b", "R4", strategy="RNA-Seq"),
     ]
-    out = build.resolve_specimens(rows, sv)
+    out, own = build.resolve_specimens(rows, sv)
     assert out == {"SP1": "W1", "SP2": "W2", "SP2b": "W2", "SP3": "W3", "SP3b": "W3", "SP3x": "W3"}
+    assert own == {"SP1", "SP2", "SP3"}
     # a donor with two SV tumours gets no guess for an unmatched specimen
     sv2 = {**sv, "W9": "LIRI-JP"}
-    assert "SP3b" not in build.resolve_specimens(rows, sv2) and build.resolve_specimens(rows, sv2)["SP3x"] == "W9"
+    out2, _ = build.resolve_specimens(rows, sv2)
+    assert "SP3b" not in out2 and out2["SP3x"] == "W9"
+
+
+def test_pick_columns_keeps_one_column_per_aliquot_preferring_the_specimens_own():
+    """OV-AU has donors with a primary (own specimen) and recurrences (other specimens): the
+    fallback must not add a second column for the same SV tumour, and a donor with several
+    fallback candidates and no own column gets none — the sequenced tumour is unknown."""
+    resolve = {"SP1": "W1", "SP1r": "W1", "SP2b": "W2", "SP3m1": "W3", "SP3m2": "W3"}
+    header = ["feature", "SP1r", "SP1", "SP2b", "SP3m1", "SP3m2", "SPunknown"]
+    chosen, unmatched, dropped = build.pick_columns(header, resolve, own={"SP1"})
+    assert chosen == {"W1": 2, "W2": 3}          # own column wins over the recurrence; single fallback kept
+    assert unmatched == 1 and dropped == 3        # SP1r duplicate; SP3m1/SP3m2 ambiguous
 
 
 class _Chain:

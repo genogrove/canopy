@@ -339,13 +339,13 @@ RESOURCES: dict[str, Resource] = {
         name="pcawg.expression",
         url=(
             "https://huggingface.co/datasets/genogrove/canopy/resolve/"
-            "a8d92017d4274fb5a2fc6ca82d9eeba06f8c6ef3"
+            "e10b730f001dadc004b658d5ab62ed13cc671a63"
             "/layers/genomic/pcawg-expression/pcawg_rnaseq_fpkm_uq_log2.by_cohort.tgz"
         ),
-        sha256="9193f30a04c76958d867df0d023bc0ebaf06e3521eca7bec0f9dd928bf730509",
+        sha256="fb0929d2c1f48999c0138d0ae0ca2b689f557420baa0936e61a511cee1ffc797",
         filename="pcawg_rnaseq_fpkm_uq_log2.by_cohort.tgz",
         description="PCAWG-3 RNA-seq expression (log2 FPKM-UQ), one table per ICGC project, "
-                    "1,233 tumours in 29 projects, 51,223 GENCODE v50 genes, keyed by WGS aliquot.",
+                    "1,212 tumours in 29 projects, 51,223 GENCODE v50 genes, keyed by WGS aliquot.",
     ),
     "pcawg.cn": Resource(
         name="pcawg.cn",

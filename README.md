@@ -112,13 +112,14 @@ One grove, queried through one handle, holds seven layers:
   10 kb windows, inserted as indexed `hichip_anchor` nodes on first use. No edge joins a
   window to a gene or cCRE: what a window overlaps is a spatial query, in both directions,
   and a window is the unit of evidence — nothing finer than 10 kb is asserted.
-- **Gene expression** — PCAWG-3 RNA-seq (TopHat2 + STAR, FPKM-UQ, log2), 1,233 tumours
+- **Gene expression** — PCAWG-3 RNA-seq (TopHat2 + STAR, FPKM-UQ, log2), 1,212 tumours
   in 29 ICGC project codes, attached per question by tumour cohort as one graph-only
   node per gene per cohort hung off the gene, its values keyed by the tumour's WGS aliquot
   id. That is the id the SV layer puts on every breakpoint edge, so "carriers versus
   non-carriers" is a dictionary lookup, and a tumour without RNA-seq is simply absent.
   RNA-seq registered under a different specimen id than the tumour's WGS is joined through
-  the donor when the donor has exactly one SV tumour, never guessed otherwise.
+  the donor when the donor has exactly one SV tumour and no RNA under its own specimen;
+  one column per tumour, never guessed otherwise.
 - **Copy number** — PCAWG-11 consensus segments (six callers reconciled on the consensus
   SV breakpoints), lifted to GRCh38, 2,748 tumours in all 47 project codes, attached per
   question by tumour cohort as one indexed `cn_segment` per segment per tumour with total,

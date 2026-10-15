@@ -50,12 +50,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from liftover_pcawg_sv import _chain_file  # noqa: E402  the same pinned chain file
 
 
-def resolve_specimens(rows: list[dict], sv: dict) -> dict:
-    """``specimen id -> WGS aliquot id`` for the aliquots in ``sv`` (aliquot -> project code),
-    from sample-sheet ``rows``: a specimen's own SV aliquot first; else, for a tumour specimen
-    of a donor with exactly one SV aliquot, that aliquot (RNA-seq and WGS of one tumour are
-    often registered under different specimen ids). A donor with several SV tumours gets no
-    guess — the RNA could belong to any of them."""
+def resolve_specimens(rows: list[dict], sv: dict) -> tuple[dict, set]:
+    """``(specimen id -> WGS aliquot id, specimens that are the aliquot's own)`` for the aliquots
+    in ``sv`` (aliquot -> project code), from sample-sheet ``rows``: a specimen's own SV aliquot
+    first; else, for a tumour specimen of a donor with exactly one SV aliquot, that aliquot
+    (RNA-seq and WGS of one tumour are often registered under different specimen ids). A donor
+    with several SV tumours gets no guess — the RNA could belong to any of them. The caller
+    uses the fallback only for an aliquot that has no own column (see ``build_expression``)."""
     own = {r["icgc_specimen_id"]: r["aliquot_id"] for r in rows if r["aliquot_id"] in sv}
     donor_aliquots = defaultdict(set)
     for r in rows:
@@ -69,14 +70,15 @@ def resolve_specimens(rows: list[dict], sv: dict) -> dict:
         aliquots = donor_aliquots.get(r["icgc_donor_id"], ())
         if len(aliquots) == 1:
             out[spec] = next(iter(aliquots))
-    return out
+    return out, set(own)
 
 
-def _aliquot_map() -> tuple[dict, dict]:
+def _aliquot_map() -> tuple[dict, set, dict]:
     sv = {a: r["project_code"] for r in resources.pcawg_cohorts() for a in r["aliquot_ids"]}
     with open(resources.resolve("pcawg.sample_sheet"), newline="") as fh:
         rows = list(csv.DictReader(fh, delimiter="\t"))
-    return resolve_specimens(rows, sv), sv
+    mapping, own = resolve_specimens(rows, sv)
+    return mapping, own, sv
 
 
 #: A lifted segment may differ from the original by this much before it is dropped: more
@@ -116,19 +118,39 @@ def _tss() -> dict:
     return out
 
 
-def build_expression(out_dir: Path, resolve: dict, project: dict) -> dict:
+def pick_columns(header: list[str], resolve: dict, own: set) -> tuple[dict, int, int]:
+    """``aliquot -> column index`` for the matrix ``header`` (first cell is the feature name):
+    the aliquot's own specimen column when there is one; else the donor-fallback column, and
+    only if it is the single such column — a donor with a primary and two metastases has three
+    RNA columns for one SV aliquot, and none of them is known to be the sequenced tumour.
+    Returns the picks, the unmatched column count and the dropped-duplicate count."""
+    chosen, fallback, unmatched = {}, defaultdict(list), 0
+    for i, col in enumerate(header[1:], start=1):
+        aliquot = resolve.get(col)
+        if aliquot is None:
+            unmatched += 1
+        elif col in own:
+            chosen[aliquot] = i
+        else:
+            fallback[aliquot].append(i)
+    dropped = 0
+    for aliquot, cols in fallback.items():
+        if aliquot in chosen or len(cols) > 1:
+            dropped += len(cols)
+        else:
+            chosen[aliquot] = cols[0]
+    return chosen, unmatched, dropped
+
+
+def build_expression(out_dir: Path, resolve: dict, own: set, project: dict) -> dict:
     tables = out_dir / "expression"
     tables.mkdir(parents=True, exist_ok=True)
     tss = _tss()
     by_code: dict[str, list[tuple[int, str]]] = defaultdict(list)  # code -> [(column index, aliquot)]
-    unmatched = 0
     with open(resources.resolve("pcawg.rnaseq.xena")) as fh:
         header = fh.readline().rstrip("\n").split("\t")
-        for i, col in enumerate(header[1:], start=1):
-            aliquot = resolve.get(col)
-            if aliquot is None:
-                unmatched += 1
-                continue
+        chosen, unmatched, duplicates = pick_columns(header, resolve, own)
+        for aliquot, i in sorted(chosen.items(), key=lambda kv: kv[1]):
             by_code[project[aliquot]].append((i, aliquot))
         handles = {}
         for code, cols in sorted(by_code.items()):
@@ -148,7 +170,8 @@ def build_expression(out_dir: Path, resolve: dict, project: dict) -> dict:
     for h in handles.values():
         h.close()
     print(f"expression: {n_genes} genes kept, {missed} not in GENCODE v50; "
-          f"{sum(len(c) for c in by_code.values())} tumours in {len(by_code)} cohorts, {unmatched} columns unmatched")
+          f"{sum(len(c) for c in by_code.values())} tumours in {len(by_code)} cohorts, {unmatched} columns unmatched, "
+          f"{duplicates} duplicate columns dropped")
     return {code: (len(cols), n_genes) for code, cols in by_code.items()}
 
 
@@ -199,9 +222,9 @@ def main() -> None:
 
     out_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("xena_out")
     out_dir.mkdir(parents=True, exist_ok=True)
-    resolve, project = _aliquot_map()
+    resolve, own, project = _aliquot_map()
 
-    expr = build_expression(out_dir, resolve, project)
+    expr = build_expression(out_dir, resolve, own, project)
     with (out_dir / "expression_cohorts.tsv").open("w") as fh:
         fh.write("project_code\tn_samples\tn_genes\n")
         for code, (n, g) in sorted(expr.items()):
